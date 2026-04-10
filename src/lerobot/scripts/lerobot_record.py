@@ -78,6 +78,7 @@ from lerobot.teleoperators import (  # noqa: F401
     pico4,
     pico4_hand,
     trlc_leader,
+    bi_trlc,
 )
 from lerobot.utils.robot_utils import emergency_stop_flexiv_rt_robot
 
@@ -1864,7 +1865,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         display_data=cfg.display_data,
                     )
                 # Use specialized record loop for BiARX5 robot
-                elif cfg.robot.type == "bi_arx5":
+                elif cfg.robot.type == "bi_arx5" and cfg.teleop.type == "mock_teleop":
                     bi_arx5_record_loop(
                         robot=robot,
                         events=events,
@@ -1931,7 +1932,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
                     )
-                elif cfg.robot.type == "arx5_follower":
+                elif (
+                    cfg.robot.type == "arx5_follower"
+                    and cfg.teleop.type == "trlc_leader"
+                ) or (cfg.robot.type == "bi_arx5" and cfg.teleop.type == "bi_trlc"):
                     arx5_trlc_record_loop(
                         robot=robot,
                         teleop=teleop,

@@ -344,6 +344,100 @@ def _print_obs_state(obs: dict, display_len: int, status: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared timing helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_slow_frame_obs_suffix(robot: Robot | None) -> str:
+    if robot is None:
+        return ""
+
+    timing = getattr(robot, "_last_obs_timing", None)
+    if not isinstance(timing, dict):
+        return ""
+
+    parts: list[str] = []
+    total_ms = timing.get("total_ms")
+    if isinstance(total_ms, (int, float)):
+        parts.append(f"obs={float(total_ms):.1f}ms")
+
+    arm_items = [
+        (key[:-3], float(value))
+        for key, value in timing.items()
+        if key.endswith("_arm_ms") and isinstance(value, (int, float))
+    ]
+    if arm_items:
+        parts.append(f"arms={sum(value for _, value in arm_items):.1f}ms")
+
+    grip_items = [
+        (key[:-3], float(value))
+        for key, value in timing.items()
+        if key.endswith("_grip_ms") and isinstance(value, (int, float))
+    ]
+    if grip_items:
+        parts.append(f"grips={sum(value for _, value in grip_items):.1f}ms")
+
+    cameras_ms = timing.get("cameras_ms")
+    if isinstance(cameras_ms, (int, float)):
+        parts.append(f"cams={float(cameras_ms):.1f}ms")
+
+    cam_items = [
+        (key[4:-4], float(value))
+        for key, value in timing.items()
+        if (
+            key.startswith("cam[")
+            and key.endswith("]_ms")
+            and isinstance(value, (int, float))
+        )
+    ]
+    cam_items.sort(key=lambda item: item[1], reverse=True)
+
+    obs_part_items = arm_items + grip_items + cam_items
+    obs_part_items.sort(key=lambda item: item[1], reverse=True)
+    if obs_part_items:
+        visible_obs_items = [item for item in obs_part_items if item[1] >= 0.1]
+        if not visible_obs_items:
+            visible_obs_items = obs_part_items
+        top_parts = ", ".join(
+            f"{name}={value:.1f}ms" for name, value in visible_obs_items[:4]
+        )
+        parts.append(f"top_obs={top_parts}")
+
+    return f" | {' '.join(parts)}" if parts else ""
+
+
+def _teleop_loop_sleep(
+    start_loop_t: float,
+    fps: int,
+    session_start_t: float,
+    robot: Robot | None = None,
+) -> None:
+    """Sleep for the remaining frame budget; log a warning if the loop overran."""
+    if fps <= 0:
+        return
+
+    budget_s = 1.0 / fps
+    dt_s = time.perf_counter() - start_loop_t
+    remaining_s = budget_s - dt_s
+    if remaining_s > 0:
+        busy_wait(remaining_s)
+        return
+
+    session_t_s = time.perf_counter() - session_start_t
+    robot_name = (
+        getattr(robot, "name", None) or getattr(type(robot), "__name__", "teleop")
+        if robot is not None
+        else "teleop"
+    )
+    logger.warn(
+        f"[slow_frame] robot={robot_name} t={session_t_s:.3f}s "
+        f"loop={dt_s * 1e3:.1f}ms budget={budget_s * 1e3:.1f}ms "
+        f"overrun={(-remaining_s) * 1e3:.1f}ms"
+        f"{_format_slow_frame_obs_suffix(robot)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic teleop loop (upstream)
 # ---------------------------------------------------------------------------
 
@@ -421,8 +515,7 @@ def teleop_loop(
                     print(f"{motor:<{display_len}} | {value:>9.4f}")
                 move_cursor_up(len(robot_action_to_send) + 3)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0.0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if debug_timing:
@@ -500,8 +593,7 @@ def mock_robot_teleop_loop(
         if not dryrun:
             _ = robot.send_action(robot_action_to_send)
 
-        dt_s = time.perf_counter() - loop_start
-        busy_wait(1 / fps - dt_s)
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if display_data:
@@ -704,8 +796,7 @@ def arx5_teleop_loop(
                         print(f"{motor:<{col_width}} | {value:>7.3f}")
                     move_cursor_up(len(motor_items) + 4)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
         timing_stats["loop_times"].append(loop_s * 1000)
 
@@ -827,8 +918,7 @@ def arx5_trlc_leader_teleop_loop(
         if not dryrun:
             _ = robot.send_action(robot_action_to_send)
 
-        dt_s = time.perf_counter() - loop_start
-        busy_wait(1 / fps - dt_s)
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if display_data:
@@ -967,8 +1057,7 @@ def bi_arx5_bi_trlc_teleop_loop(
         if not dryrun:
             _ = robot.send_action(robot_action_to_send)
 
-        dt_s = time.perf_counter() - loop_start
-        busy_wait(1 / fps - dt_s)
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if display_data:
@@ -1219,8 +1308,7 @@ def spacemouse_teleop_loop(
                     print(f"{motor:<{display_len}} | {value:>7.3f}")
                 move_cursor_up(len(robot_action_to_send) + 5)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
         timing_stats["loop_times"].append(loop_s * 1000)
 
@@ -1323,8 +1411,7 @@ def btgamepad_teleop_loop(
                 print(f"{motor:<{display_len}} | {value:>7.4f}")
             move_cursor_up(len(robot_action_to_send) + 5)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if not display_data:
@@ -1441,8 +1528,7 @@ def pico4_teleop_loop(
                 print(f"{motor:<{display_len}} | {value:>7.4f}")
             move_cursor_up(len(robot_action_to_send) + 5)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if not display_data:
@@ -1535,8 +1621,7 @@ def bi_pico4_teleop_loop(
                 print("\033[2J\033[H", end="", flush=True)
                 _reset_display_cleared = True
             # _print_obs_state(obs, display_len, "RESETTING")
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
 
         if hasattr(robot, "rt_moving") and robot.rt_moving:
@@ -1547,8 +1632,7 @@ def bi_pico4_teleop_loop(
                 _reset_display_cleared = True
             # _print_obs_state(obs, display_len, "MOVING")
             _prev_rt_moving = True
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
 
         if _prev_rt_moving:
@@ -1580,7 +1664,7 @@ def bi_pico4_teleop_loop(
             t_rerun = t_send
 
         dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if debug_timing:
@@ -1661,8 +1745,7 @@ def vive_tracker_teleop_loop(
             raw_action = teleop.get_action()
         except Exception as e:
             logger.error(f"Error getting Vive Tracker action: {e}")
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
 
         teleop_action = teleop_action_processor((raw_action, obs))
@@ -1683,8 +1766,7 @@ def vive_tracker_teleop_loop(
                 print(f"{motor:<{display_len}} | {value:>7.4f}")
             move_cursor_up(len(robot_action_to_send) + 5)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         action_str = ", ".join(
@@ -1735,8 +1817,7 @@ def xense_flare_flexiv_teleop_loop(
             raw_action = teleop.get_action()
         except Exception as e:
             logger.error(f"Error getting Xense Flare action: {e}")
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
         teleop_time = time.perf_counter() - teleop_start
 
@@ -1756,8 +1837,7 @@ def xense_flare_flexiv_teleop_loop(
             obs_transition = robot_observation_processor(obs)
             log_rerun_data(observation=obs_transition, action=teleop_action)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         gripper_str = f"grip={robot_action_to_send.get('gripper.pos', 0.0):.2f}"
@@ -1833,8 +1913,7 @@ def xense_flare_teleop_loop(
             obs = robot.get_observation()
         except Exception as e:
             logger.error(f"Error getting observation: {e}")
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
 
         total_obs_time = time.perf_counter() - obs_start
@@ -2017,8 +2096,7 @@ def xense_flare_teleop_loop(
                 except Exception:
                     pass  # Lighthouse visualization is optional
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
         timing_stats["loop_times"].append(loop_s * 1000)
 
@@ -2085,8 +2163,7 @@ def bi_xense_flare_grippers_teleop_loop(
             obs = robot.get_observation()
         except Exception as e:
             logger.error(f"Error getting observation: {e}")
-            dt_s = time.perf_counter() - loop_start
-            precise_sleep(max(1 / fps - dt_s, 0))
+            _teleop_loop_sleep(loop_start, fps, start, robot)
             continue
 
         total_obs_time = time.perf_counter() - obs_start
@@ -2098,8 +2175,7 @@ def bi_xense_flare_grippers_teleop_loop(
         if display_data:
             log_rerun_data(observation=obs, action={})
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
         timing_stats["loop_times"].append(loop_s * 1000)
 

@@ -132,11 +132,11 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-Example (Xense Multisensor, data collection — no teleoperator needed):
+Example (Bi Xense Flare Grippers, data collection — no teleoperator needed):
 
 ```shell
 lerobot-teleoperate \
-    --robot.type=xense_multisensor \
+    --robot.type=bi_xense_flare_grippers \
     --teleop.type=btgamepad \
     --fps=30 \
     --display_data=true
@@ -228,6 +228,7 @@ from lerobot.robots import (  # noqa: F401
     bi_dobot_nova5_dh,
     bi_flexiv_rizon4_rt,
     dobot_nova5,
+    bi_xense_flare_grippers,
     flexiv_rizon4,
     flexiv_rizon4_rt,
     make_robot_from_config,
@@ -235,6 +236,7 @@ from lerobot.robots import (  # noqa: F401
     pylibfranka_research3,
     xense_flare as xense_flare_robot,
     xense_multisensor,
+    mock_robot,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -1911,7 +1913,7 @@ def xense_flare_teleop_loop(
             return
 
 
-def xense_multisensor_teleop_loop(
+def bi_xense_flare_grippers_teleop_loop(
     robot: Robot,
     fps: int,
     robot_observation_processor: Any,
@@ -1920,10 +1922,9 @@ def xense_multisensor_teleop_loop(
     debug_timing: bool = False,
 ):
     """
-    Data collection loop for Xense Multisensor robot.
+    Data collection loop for the dual-gripper camera rig.
 
-    Xense Multisensor is a pure observation device (similar to teach mode).
-    No actions are sent to the robot - it is a data collection device.
+    This robot provides camera observations and gripper state, but no arm motion.
     """
     start = time.perf_counter()
     timing_stats = {
@@ -1995,11 +1996,6 @@ def xense_multisensor_teleop_loop(
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
-
 @parser.wrap()
 def teleoperate(cfg: TeleoperateConfig):
     logger.info(pformat(asdict(cfg)))
@@ -2047,18 +2043,18 @@ def teleoperate(cfg: TeleoperateConfig):
             except KeyboardInterrupt:
                 logger.info("Data collection interrupted by user")
 
-        # --- xense_multisensor (robot-only, data collection) ---
-        elif cfg.robot.type == "xense_multisensor":
-            logger.info("Detected Xense Multisensor data collection device")
+        # --- bi_xense_flare_grippers (robot-only, data collection) ---
+        elif cfg.robot.type == "bi_xense_flare_grippers":
+            logger.info("Detected Bi Xense Flare Grippers data collection device")
             robot = make_robot_from_config(cfg.robot)
             robot.connect()
             logger.info(
-                f"Xense Multisensor connected — cameras: {list(robot.cameras.keys())}"
+                f"Bi Xense Flare Grippers connected — cameras: {list(robot.cameras.keys())}"
             )
 
             _, _, robot_observation_processor = make_default_processors()
             try:
-                xense_multisensor_teleop_loop(
+                bi_xense_flare_grippers_teleop_loop(
                     robot=robot,
                     fps=cfg.fps,
                     display_data=cfg.display_data,

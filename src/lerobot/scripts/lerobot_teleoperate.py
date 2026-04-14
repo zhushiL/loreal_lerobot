@@ -2203,7 +2203,6 @@ def teleoperate(cfg: TeleoperateConfig):
                     teleop_action_processor=teleop_action_processor,
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
-                    debug_timing=cfg.debug_timing,
                     dryrun=cfg.dryrun,
                 )
             except KeyboardInterrupt:
@@ -2231,7 +2230,6 @@ def teleoperate(cfg: TeleoperateConfig):
                     teleop_action_processor=teleop_action_processor,
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
-                    debug_timing=cfg.debug_timing,
                     dryrun=cfg.dryrun,
                 )
             except KeyboardInterrupt:
@@ -2257,7 +2255,6 @@ def teleoperate(cfg: TeleoperateConfig):
                     teleop_action_processor=teleop_action_processor,
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
-                    debug_timing=cfg.debug_timing,
                 )
             except KeyboardInterrupt:
                 pass

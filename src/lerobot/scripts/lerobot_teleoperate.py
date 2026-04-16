@@ -508,12 +508,6 @@ def teleop_loop(
                 compress_images=display_compressed_images,
             )
 
-            if not debug_timing:
-                print("\n" + "-" * (display_len + 10))
-                print(f"{'NAME':<{display_len}} | {'VALUE':>9}")
-                for motor, value in robot_action_to_send.items():
-                    print(f"{motor:<{display_len}} | {value:>9.4f}")
-                move_cursor_up(len(robot_action_to_send) + 3)
 
         _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
@@ -1166,12 +1160,6 @@ def spacemouse_teleop_loop(
 
         if display_data:
             log_rerun_data(observation=obs, action=teleop_action)
-            if not debug_timing:
-                print("\n" + "-" * (display_len + 10))
-                print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-                for motor, value in robot_action_to_send.items():
-                    print(f"{motor:<{display_len}} | {value:>7.3f}")
-                move_cursor_up(len(robot_action_to_send) + 5)
 
         _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
@@ -1270,11 +1258,6 @@ def btgamepad_teleop_loop(
 
         if display_data:
             log_rerun_data(observation=obs, action=teleop_action)
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.4f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
 
         _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
@@ -1387,11 +1370,6 @@ def pico4_teleop_loop(
 
         if display_data:
             log_rerun_data(observation=obs, action=teleop_action)
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.4f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
 
         _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
@@ -1520,11 +1498,6 @@ def bi_pico4_teleop_loop(
         if display_data:
             log_rerun_data(observation=obs, action=raw_action)
             t_rerun = time.perf_counter()
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            for motor, value in raw_action.items():
-                print(f"{motor:<{display_len}} | {value:>7.4f}")
-            move_cursor_up(len(raw_action) + 5)
         else:
             t_rerun = t_send
 
@@ -1625,11 +1598,6 @@ def vive_tracker_teleop_loop(
         if display_data:
             obs_transition = robot_observation_processor(obs)
             log_rerun_data(observation=obs_transition, action=teleop_action)
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.4f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
 
         _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start

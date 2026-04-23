@@ -237,6 +237,7 @@ from lerobot.robots import (  # noqa: F401
     xense_flare as xense_flare_robot,
     xense_multisensor,
     mock_robot,
+    dobot_nova5,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,

@@ -56,11 +56,12 @@ from lerobot.utils.robot_utils import (
     get_logger,
     quaternion_to_euler,
     quaternion_to_rotation_6d,
+    euler_to_quaternion,
     rotation_6d_to_quaternion,
 )
 
 # Alias for dobot_api.Mode for convenience
-Mode = DobotApiDashboard.RequestControl()
+# Mode = DobotApiDashboard.RequestControl()
 
 # Constants from dobot_api
 JOINT_DOF = 6  # Dobot Nova5 robot joint DOF
@@ -119,6 +120,8 @@ class DobotNova5(Robot):
                 self.DigitalInputs =-1
                 self.DigitalOutputs = -1
                 self.robotCurrentCommandID = -1
+                self.tcpPose = [ 258.1406287 ,  -78.59815584, 734.56544667, -171.70077286,    4.8702051,  -84.81002799]
+                self.qActual = [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
                 # 自定义添加所需反馈数据
 
         self.feedData = item()  # 定义结构对象
@@ -323,7 +326,7 @@ class DobotNova5(Robot):
             )
 
         try:
-            self.logger.info(f"Connecting to Dobot Nova5 robot: {self.config.robot_sn}")
+            self.logger.info(f"Connecting to Dobot Nova5 robot: {self.config.robot_ip}")
 
             # Create robot interface
             self._robot = DobotApiDashboard(self.config.robot_ip, self.config.dashboardPort)
@@ -417,7 +420,7 @@ class DobotNova5(Robot):
 
         self.logger.info("Moving to home position...")
 
-        home_point_list = self.config.home_point_list
+        home_point_list = np.deg2rad(self.config.home_point_list)
         # 走点指令
         recvmovemess = self._robot.MovJ(*home_point_list, 0)
         print("MovJ:", recvmovemess)
@@ -428,6 +431,8 @@ class DobotNova5(Robot):
         while True:  #完成判断循环
 
             print(self.feedData.RobotMode)
+            print("robotCurrentCommandID",self.feedData.robotCurrentCommandID)
+            print("currentCommandID",currentCommandID)
             if self.feedData.RobotMode == 5 and self.feedData.robotCurrentCommandID == currentCommandID:
                 print("运动结束")
                 break
@@ -539,6 +544,8 @@ class DobotNova5(Robot):
                         self.feedData.DigitalInputs = feedInfo['DigitalInputs'][0]
                         self.feedData.DigitalOutputs = feedInfo['DigitalOutputs'][0]
                         self.feedData.robotCurrentCommandID = feedInfo['CurrentCommandId'][0]
+                        self.feedData.tcpPose = feedInfo['ToolVectorActual'][0]
+                        self.feedData.qActual = feedInfo['QActual'][0]
                         # 自定义添加所需反馈数据
                         '''
                         self.feedData.DigitalOutputs = int(feedInfo['DigitalOutputs'][0])
@@ -565,12 +572,12 @@ class DobotNova5(Robot):
             # Joint positions (7D)
             for i, key in enumerate(self._joint_pos_keys):
                 # TODO
-                # obs_dict[key] = self.feedData.[i]
+                obs_dict[key] = self.feedData.qActual[i]
 
         elif self.config.control_mode == ControlMode.CARTESIAN_MOTION:
             # TCP pose from SDK: [x, y, z, qw, qx, qy, qz]
             # TODO
-            tcp_pose = self.feedData.
+            tcp_pose = self.feedData.tcpPose
 
             # Position (3D)
             obs_dict["tcp.x"] = tcp_pose[0]
@@ -578,7 +585,8 @@ class DobotNova5(Robot):
             obs_dict["tcp.z"] = tcp_pose[2]
 
             # Convert quaternion to 6D rotation representation
-            r6d = quaternion_to_rotation_6d(tcp_pose[3], tcp_pose[4], tcp_pose[5], tcp_pose[6])
+            quat = euler_to_quaternion(np.deg2rad(tcp_pose[3]), np.deg2rad(tcp_pose[4]), np.deg2rad(tcp_pose[5]))
+            r6d = quaternion_to_rotation_6d(quat[0], quat[1], quat[2], quat[3])
 
             obs_dict["tcp.r1"] = r6d[0]
             obs_dict["tcp.r2"] = r6d[1]
@@ -819,15 +827,16 @@ class DobotNova5(Robot):
         euler = quaternion_to_euler(
             quat[0], quat[1], quat[2], quat[3]
         )
-
-        # Send command using NRT API (pure motion - no wrench parameter needed)
-        self._robot.ServoP(
-            x, y, z, 
-            euler[0], euler[1], euler[2], 
-            self._control_frequency, 
-            self._aheadtime, 
-            self._gain
-        )
+        print("x,y,z",x,y,z)
+        print("euler",euler)
+        # # Send command using NRT API (pure motion - no wrench parameter needed)
+        # self._robot.ServoP(
+        #     x, y, z, 
+        #     euler[0], euler[1], euler[2], 
+        #     self._control_frequency, 
+        #     self._aheadtime, 
+        #     self._gain
+        # )
 
         return action
 

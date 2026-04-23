@@ -20,6 +20,8 @@ class DobotDemo:
                 self.DigitalInputs =-1
                 self.DigitalOutputs = -1
                 self.robotCurrentCommandID = -1
+                self.tcpPose = [ 258.14052581,  -78.59833285,  734.56547439, -171.70076871,    4.87020516,  -84.81010365]
+                self.qActual = [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
                 # 自定义添加所需反馈数据
 
         self.feedData = item()  # 定义结构对象
@@ -48,7 +50,9 @@ class DobotDemo:
             print("DI:", self.feedData.DigitalInputs,"2DI:", bin(self.feedData.DigitalInputs),"--16:",hex(self.feedData.DigitalInputs))
             print("DO:", self.feedData.DigitalOutputs,"2DO:" ,bin(self.feedData.DigitalOutputs),"--16:",hex(self.feedData.DigitalOutputs))
             print("robomode",self.feedData.robotMode)
-            sleep(2)
+            print("tcpPose",self.feedData.tcpPose)
+            print("qActual",self.feedData.qActual)
+            sleep(0.2)
 
     def GetFeed(self):
         # 获取机器人状态
@@ -63,6 +67,8 @@ class DobotDemo:
                         self.feedData.DigitalInputs = feedInfo['DigitalInputs'][0]
                         self.feedData.DigitalOutputs = feedInfo['DigitalOutputs'][0]
                         self.feedData.robotCurrentCommandID = feedInfo['CurrentCommandId'][0]
+                        self.feedData.tcpPose = feedInfo['ToolVectorActual'][0]
+                        self.feedData.qActual = feedInfo['QActual'][0]
                         # 自定义添加所需反馈数据
                         '''
                         self.feedData.DigitalOutputs = int(feedInfo['DigitalOutputs'][0])

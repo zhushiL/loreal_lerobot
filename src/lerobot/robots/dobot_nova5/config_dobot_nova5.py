@@ -68,7 +68,7 @@ class DobotNova5Config(RobotConfig):
     """
 
     # Robot identification
-    robot_ip: str = "192.168.1.1"  # Robot IP address
+    robot_ip: str = "192.168.5.1"  # Robot IP address
     dashboardPort: int = 29999
     feedPortFour: int = 30004
 
@@ -87,11 +87,11 @@ class DobotNova5Config(RobotConfig):
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
 
-    home_point_list = [0.0, -40.0, 0.0, 90.0, 0.0, 40.0, 0.0]
+    home_point_list = [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
     # Start position parameters (for MoveJ primitive)
     # Joint positions in degrees (factory-defined home position)
     start_position_degree: list[float] = field(
-        default_factory=lambda: [0.0, -40.0, 0.0, 90.0, 0.0, 40.0, 0.0]
+        default_factory=lambda: [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
     )
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
@@ -100,7 +100,7 @@ class DobotNova5Config(RobotConfig):
     # ======================== Xense Gripper (end-effector) settings ==========
     # Whether to use the Xense Gripper end-effector
     # If False, xense_gripper will be None and no gripper functionality is available
-    use_gripper: bool = True
+    use_gripper: bool = False
 
     # Gripper identification (MAC address / serial number)
     xense_gripper_mac_addr: str = "e2b26adbb104"
@@ -169,24 +169,24 @@ class DobotNova5Config(RobotConfig):
                 f"control_frequency must be between 1 and 100 Hz for NRT mode, got {self.control_frequency}"
             )
 
-        # Validate joint parameters have correct length (7-DOF robot)
-        if len(self.joint_max_vel) != 7:
-            raise ValueError(f"joint_max_vel must have 7 elements, got {len(self.joint_max_vel)}")
-        if len(self.joint_max_acc) != 7:
-            raise ValueError(f"joint_max_acc must have 7 elements, got {len(self.joint_max_acc)}")
+        # # Validate joint parameters have correct length (6-DOF robot)
+        # if len(self.joint_max_vel) != 6:
+        #     raise ValueError(f"joint_max_vel must have 6 elements, got {len(self.joint_max_vel)}")
+        # if len(self.joint_max_acc) != 6:
+        #     raise ValueError(f"joint_max_acc must have 6 elements, got {len(self.joint_max_acc)}")
 
-        # Validate Cartesian/force parameters have correct length (6-DOF)
-        if len(self.force_control_axis) != 6:
-            raise ValueError(f"force_control_axis must have 6 elements, got {len(self.force_control_axis)}")
-        if len(self.max_contact_wrench) != 6:
-            raise ValueError(f"max_contact_wrench must have 6 elements, got {len(self.max_contact_wrench)}")
-        if len(self.target_wrench) != 6:
-            raise ValueError(f"target_wrench must have 6 elements, got {len(self.target_wrench)}")
+        # # Validate Cartesian/force parameters have correct length (6-DOF)
+        # if len(self.force_control_axis) != 6:
+        #     raise ValueError(f"force_control_axis must have 6 elements, got {len(self.force_control_axis)}")
+        # if len(self.max_contact_wrench) != 6:
+        #     raise ValueError(f"max_contact_wrench must have 6 elements, got {len(self.max_contact_wrench)}")
+        # if len(self.target_wrench) != 6:
+        #     raise ValueError(f"target_wrench must have 6 elements, got {len(self.target_wrench)}")
 
         # Validate start position parameters
-        if len(self.start_position_degree) != 7:
+        if len(self.start_position_degree) != 6:
             raise ValueError(
-                f"start_position_degree must have 7 elements, got {len(self.start_position_degree)}"
+                f"start_position_degree must have 6 elements, got {len(self.start_position_degree)}"
             )
         if not 1 <= self.start_vel_scale <= 100:
             raise ValueError(f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}")

@@ -172,6 +172,17 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
+Example (Dobot Nova5 + Pico4):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=dobot_nova5 \
+    --teleop.type=pico4 \
+    --fps=30 \
+    --display_data=true
+```
+
+
 """
 
 import time
@@ -197,6 +208,7 @@ from lerobot.robots import (  # noqa: F401
     xense_flare as xense_flare_robot,
     xense_multisensor,
     mock_robot,
+    dobot_nova5,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -2360,6 +2372,112 @@ def teleoperate(cfg: TeleoperateConfig):
                     )
 
                 # Connect to robot (launches ws_teleop_server, moves to home)
+                try:
+                    robot.connect(go_to_start=True)
+                    logger.info(f"Start EEF pose: {robot.get_current_tcp_pose_quat()}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to connect to robot: {e}\n{traceback.format_exc()}"
+                    )
+                    raise
+
+                (
+                    teleop_action_processor,
+                    robot_action_processor,
+                    robot_observation_processor,
+                ) = make_default_processors()
+
+                # Connect to teleoperator with robot's current TCP pose
+                try:
+                    teleop = make_teleoperator_from_config(cfg.teleop)
+                    teleop.connect(
+                        current_tcp_pose_quat=robot.get_current_tcp_pose_quat()
+                    )
+                    logger.info("Connected to Pico4")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to connect to Pico4: {e}\n{traceback.format_exc()}"
+                    )
+                    raise
+
+                # Run teleoperation loop (reuse pico4_teleop_loop — same action format)
+                try:
+                    pico4_teleop_loop(
+                        teleop=teleop,
+                        robot=robot,
+                        fps=cfg.fps,
+                        display_data=cfg.display_data,
+                        duration=cfg.teleop_time_s,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                        dryrun=cfg.dryrun,
+                    )
+                except KeyboardInterrupt:
+                    logger.info("Teleoperation interrupted by user")
+                except Exception as e:
+                    logger.error(
+                        f"Error during teleoperation loop: {e}\n{traceback.format_exc()}"
+                    )
+                    raise
+
+            except Exception as e:
+                logger.error(
+                    f"Error in teleoperation setup or execution: {e}\n{traceback.format_exc()}"
+                )
+            finally:
+                if cfg.display_data:
+                    try:
+                        rr.rerun_shutdown()
+                    except Exception as e:
+                        logger.warn(f"Error shutting down rerun: {e}")
+
+                if teleop is not None:
+                    try:
+                        if teleop.is_connected:
+                            teleop.disconnect()
+                            logger.info("Pico4 disconnected")
+                    except Exception as e:
+                        logger.error(
+                            f"Error disconnecting Pico4: {e}\n{traceback.format_exc()}"
+                        )
+
+                if robot is not None:
+                    try:
+                        if robot.is_connected:
+                            robot.disconnect()
+                            logger.info("Robot safely disconnected")
+                    except Exception as e:
+                        logger.error(
+                            f"Error disconnecting robot: {e}\n{traceback.format_exc()}"
+                        )
+
+        # ======================== Pylibfranka Research3 ========================
+        # Check if this is Pylibfranka Research3 robot with pico4
+        elif cfg.robot.type == "dobot_nova5" and cfg.teleop.type == "pico4":
+            logger.info(
+                "Detected Dobot Nova5 robot with Pico4, using specialized teleop loop"
+            )
+
+            robot = None
+            teleop = None
+
+            try:
+                # Create robot instance
+                robot = make_robot_from_config(cfg.robot)
+
+                # Ensure robot is in CARTESIAN_IMPEDANCE mode for pico4 teleop
+                from lerobot.robots.dobot_nova5.config_dobot_nova5 import (
+                    ControlMode as DobotNova5ControlMode,
+                )
+
+                if robot.config.control_mode != DobotNova5ControlMode.CARTESIAN_MOTION:
+                    raise ValueError(
+                        f"Pico4 teleoperation requires CARTESIAN_MOTION mode, "
+                        f"but robot is configured with {robot.config.control_mode}"
+                    )
+
+                # Connect to robot
                 try:
                     robot.connect(go_to_start=True)
                     logger.info(f"Start EEF pose: {robot.get_current_tcp_pose_quat()}")

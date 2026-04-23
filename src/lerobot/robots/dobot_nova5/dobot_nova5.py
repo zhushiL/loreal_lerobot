@@ -65,6 +65,7 @@ from lerobot.utils.robot_utils import (
 
 # Constants from dobot_api
 JOINT_DOF = 6  # Dobot Nova5 robot joint DOF
+MM_PER_METER = 1000.0
 
 class DobotNova5(Robot):
     """Dobot Nova5 6-DOF collaborative robot.
@@ -109,6 +110,7 @@ class DobotNova5(Robot):
         # Robot interface (initialized on connect)
         # Note: Python API only supports NRT (Non-Real-Time) modes, no Scheduler needed
         self._robot: DobotApiDashboard | None = None
+        self._feedFour: DobotApiFeedBack | None = None
         self._feedInfo = []
         self.__globalLockValue = threading.Lock()
 
@@ -306,12 +308,225 @@ class DobotNova5(Robot):
 
         self.logger.info(f"Configuring robot for {self.config.control_mode.value} mode...")
 
+    def _parse_dobot_response(self, value_recv: str) -> tuple[int, list[str]]:
+        """Parse Dobot TCP response: ErrorID,{ResultID or values},Command(...);"""
+        if not isinstance(value_recv, str):
+            raise RuntimeError(f"Invalid Dobot response type: {type(value_recv).__name__}")
+
+        if "Not Tcp" in value_recv:
+            raise RuntimeError("Robot is not in TCP control mode")
+
+        match = re.match(r"\s*(-?\d+)\s*,\s*\{([^}]*)\}", value_recv)
+        if match is None:
+            raise RuntimeError(f"Could not parse Dobot response: {value_recv!r}")
+
+        error_id = int(match.group(1))
+        values = [value.strip() for value in match.group(2).split(",") if value.strip()]
+        return error_id, values
+
     def parseResultId(self, valueRecv):
-        # 解析返回值，确保机器人在 TCP 控制模式
-        if "Not Tcp" in valueRecv:
-            print("Control Mode Is Not Tcp")
-            return [1]
-        return [int(num) for num in re.findall(r'-?\d+', valueRecv)] or [2]
+        error_id, values = self._parse_dobot_response(valueRecv)
+        result = [error_id]
+        for value in values:
+            result.append(int(float(value)))
+        return result
+
+    def _dobot_error_detail(self) -> str:
+        if self._robot is None:
+            return ""
+        try:
+            return self._robot.GetErrorID().strip()
+        except Exception as e:
+            return f"failed to read GetErrorID: {e}"
+
+    def _raise_if_dobot_error(self, response: str, command_name: str) -> list[str]:
+        error_id, values = self._parse_dobot_response(response)
+        if error_id == 0:
+            return values
+
+        message = f"{command_name} failed with ErrorID {error_id}: {response.strip()}"
+        error_detail = self._dobot_error_detail()
+        if error_detail:
+            message = f"{message}; GetErrorID: {error_detail}"
+        raise RuntimeError(message)
+
+    def _require_command_id(self, response: str, command_name: str) -> int:
+        values = self._raise_if_dobot_error(response, command_name)
+        if not values:
+            raise RuntimeError(f"{command_name} response did not include a command ID: {response.strip()}")
+        return int(float(values[0]))
+
+    def _wait_for_command(self, command_id: int, description: str, timeout_s: float = 60.0) -> None:
+        start_time = time.time()
+        last_log_time = 0.0
+        command_id = int(command_id)
+
+        while True:
+            robot_mode = int(self.feedData.RobotMode)
+            current_command_id = int(self.feedData.robotCurrentCommandID)
+
+            if robot_mode == 9:
+                raise RuntimeError(
+                    f"{description} failed: robot entered error mode while waiting for command "
+                    f"{command_id}. GetErrorID: {self._dobot_error_detail()}"
+                )
+
+            if robot_mode == 5 and current_command_id == command_id:
+                return
+
+            now = time.time()
+            if now - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Timed out waiting for {description}: target command ID={command_id}, "
+                    f"current command ID={current_command_id}, RobotMode={robot_mode}"
+                )
+
+            if now - last_log_time >= 2.0:
+                self.logger.info(
+                    f"Waiting for {description}: RobotMode={robot_mode}, "
+                    f"CurrentCommandId={current_command_id}, target={command_id}"
+                )
+                last_log_time = now
+
+            time.sleep(0.1)
+
+    def _wait_for_joint_target(
+        self,
+        target_joint_deg: list[float],
+        description: str,
+        tolerance_deg: float = 0.5,
+        timeout_s: float = 60.0,
+    ) -> None:
+        target = np.asarray(target_joint_deg, dtype=np.float64)
+        start_time = time.time()
+        last_log_time = 0.0
+
+        while True:
+            robot_mode = int(self.feedData.RobotMode)
+            current_joint = np.asarray(self.feedData.qActual, dtype=np.float64)
+            max_abs_error = float(np.max(np.abs(current_joint - target)))
+
+            if robot_mode == 9:
+                raise RuntimeError(
+                    f"{description} failed: robot entered error mode. "
+                    f"GetErrorID: {self._dobot_error_detail()}"
+                )
+
+            if robot_mode == 5 and max_abs_error <= tolerance_deg:
+                return
+
+            now = time.time()
+            if now - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Timed out waiting for {description}: max_joint_error={max_abs_error:.3f} deg, "
+                    f"RobotMode={robot_mode}, target={target.tolist()}, current={current_joint.tolist()}"
+                )
+
+            if now - last_log_time >= 2.0:
+                self.logger.info(
+                    f"Waiting for {description}: RobotMode={robot_mode}, "
+                    f"max_joint_error={max_abs_error:.3f} deg"
+                )
+                last_log_time = now
+
+            time.sleep(0.1)
+
+    def _wait_for_first_feedback(self, timeout_s: float = 3.0) -> None:
+        start_time = time.time()
+        while self.feedData.MessageSize == -1 and self.feedData.RobotMode == -1:
+            if time.time() - start_time > timeout_s:
+                return
+            time.sleep(0.02)
+
+    def _wait_until_not_error_mode(self, timeout_s: float = 10.0) -> None:
+        start_time = time.time()
+        while int(self.feedData.RobotMode) == 9:
+            if time.time() - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Robot stays in error mode (RobotMode=9) after ClearError. "
+                    f"GetErrorID: {self._dobot_error_detail()}"
+                )
+            time.sleep(0.1)
+
+    def _send_movj_joint_v4(self, joint_degrees: list[float]) -> str:
+        if self._robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        # V4 standard API: MovJ with coordinateMode=1 (joint target).
+        # Use per-command velocity scale from config.start_vel_scale.
+        target = [float(value) for value in joint_degrees]
+        return self._robot.MovJ(
+            target[0],
+            target[1],
+            target[2],
+            target[3],
+            target[4],
+            target[5],
+            1,  # coordinateMode=1 -> joint
+            v=int(self.config.start_vel_scale),
+        )
+
+    def _move_joint_movj(self, joint_degrees: list[float], description: str) -> None:
+        if self._robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        target = [float(value) for value in joint_degrees]
+        self._raise_if_dobot_error(
+            self._robot.SpeedFactor(int(self.config.start_vel_scale)),
+            "SpeedFactor",
+        )
+        response = self._send_movj_joint_v4(target)
+        self.logger.info(f"{description} MovJ(joint) response: {response.strip()}")
+        values = self._raise_if_dobot_error(response, "MovJ(joint)")
+        command_name = "MovJ(joint)"
+
+        if values:
+            try:
+                command_id = int(float(values[0]))
+                self._wait_for_command(command_id, description)
+                return
+            except (ValueError, TypeError):
+                self.logger.warn(
+                    f"{command_name} response did not provide a valid command ID ({values}), "
+                    "falling back to joint-error completion check."
+                )
+
+        self._wait_for_joint_target(target, description)
+
+    def _initialize_gripper_position(self) -> None:
+        if self._xense_gripper is None:
+            return
+
+        if self.config.xense_gripper_init_open:
+            self._xense_gripper._gripper.set_position_sync(
+                self.config.gripper_max_pos,
+                vmax=self.config.gripper_velocity,
+                fmax=self.config.gripper_force,
+            )
+        else:
+            self._xense_gripper._gripper.set_position_sync(
+                self.config.gripper_min_pos,
+                vmax=self.config.gripper_velocity,
+                fmax=self.config.gripper_force,
+            )
+
+    def _current_gripper_position(self) -> float:
+        if self._xense_gripper and self.config.use_gripper:
+            return float(self._xense_gripper.get_gripper_position())
+        return 0.0
+
+    def _current_tcp_pose_quat_from_feedback(self) -> np.ndarray:
+        tcp_pose = np.asarray(self.feedData.tcpPose, dtype=np.float64)
+        # Dobot feedback uses mm for xyz. Convert to meters for teleop stack.
+        pos_m = tcp_pose[:3] / MM_PER_METER
+        quat = euler_to_quaternion(
+            np.deg2rad(tcp_pose[3]),
+            np.deg2rad(tcp_pose[4]),
+            np.deg2rad(tcp_pose[5]),
+        )
+        return np.array(
+            [pos_m[0], pos_m[1], pos_m[2], quat[0], quat[1], quat[2], quat[3]],
+            dtype=np.float32,
+        )
 
     def connect(self, calibrate: bool = False, go_to_start: bool = True) -> None:
         """Connect to the Dobot Nova5 robot.
@@ -332,38 +547,54 @@ class DobotNova5(Robot):
             self._robot = DobotApiDashboard(self.config.robot_ip, self.config.dashboardPort)
             self._feedFour = DobotApiFeedBack(self.config.robot_ip, self.config.feedPortFour)
 
-            # Enable the robot
-            self.logger.info("Enabling robot...")
-            if self.config.control_mode == ControlMode.CARTESIAN_MOTION:
-                if self.parseResultId(self._robot.EnableRobot())[0] != 0:
-                    self.logger.error("Failed to enable robot. Check if port 29999 is occupied.")
-                    return
-                self.logger.info("Robot TCP enabled successfully.")
-            elif self.config.control_mode == ControlMode.JOINT_MOTION:
-                self._robot.EnableRobot()
-                self.logger.info("Robot Joint enabled successfully.")
-            else:
-                raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
-
             # Start feedback thread to continuously read robot state (for get_observation)
             # TODO: Needs testing
             feed_thread = threading.Thread(
                 target=self.get_robot_state)  # robot state feedback thread
             feed_thread.daemon = True
             feed_thread.start()
+            self._wait_for_first_feedback()
 
-            # Clear any existing fault
-            # TODO: RobotMode 支持的端口是29999还是30004？需要确认一下
-            if self.feedData.RobotMode == 9: # ROBOT_MODE_ERROR
-                self.logger.warn("Fault occurred on the connected robot, trying to clear ...")
-                # Try to clear the fault
-                if not self._robot.ClearError():
-                    raise RuntimeError("Failed to clear robot fault. Check the robot status.")
+            # Clear fault before enabling if needed.
+            if int(self.feedData.RobotMode) == 9:
+                self.logger.warn("Robot is in error mode before enabling, trying ClearError ...")
+                self._raise_if_dobot_error(self._robot.ClearError(), "ClearError")
+                self._wait_until_not_error_mode()
                 self.logger.info("Fault on the connected robot is cleared")
-            elif self.feedData.RobotMode == 5: # ROBOT_MODE_ENABLE
+
+            # Enable the robot
+            self.logger.info("Enabling robot...")
+            if self.config.control_mode in (ControlMode.CARTESIAN_MOTION, ControlMode.JOINT_MOTION):
+                enable_response = self._robot.EnableRobot()
+                enable_error, _ = self._parse_dobot_response(enable_response)
+                if enable_error != 0:
+                    mode_response = self._robot.RobotMode()
+                    mode_error, mode_values = self._parse_dobot_response(mode_response)
+                    current_mode = int(float(mode_values[0])) if mode_error == 0 and mode_values else -1
+                    if current_mode in (5, 6, 7, 8):
+                        self.logger.warn(
+                            f"EnableRobot returned {enable_error}, but RobotMode={current_mode}. "
+                            "Proceeding with existing enabled/control state."
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"EnableRobot failed with ErrorID {enable_error}: {enable_response.strip()} "
+                            f"(RobotMode={current_mode}); GetErrorID: {self._dobot_error_detail()}"
+                        )
+                else:
+                    if self.config.control_mode == ControlMode.CARTESIAN_MOTION:
+                        self.logger.info("Robot TCP enabled successfully.")
+                    else:
+                        self.logger.info("Robot Joint enabled successfully.")
+            else:
+                raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
+
+            if self.feedData.RobotMode == 5:
                 self.logger.info("Robot is enabled and ready.")
             else:
-                self.logger.warn(f"Robot is in unexpected mode {self.feedData.RobotMode} after enabling. Check robot status.")
+                self.logger.warn(
+                    f"Robot is in unexpected mode {self.feedData.RobotMode} after enabling. Check robot status."
+                )
 
             # Wait for robot to become operational
             timeout = 30  # seconds
@@ -420,43 +651,9 @@ class DobotNova5(Robot):
 
         self.logger.info("Moving to home position...")
 
-        home_point_list = np.deg2rad(self.config.home_point_list)
-        # 走点指令
-        recvmovemess = self._robot.MovJ(*home_point_list, 0)
-        print("MovJ:", recvmovemess)
-        print(self.parseResultId(recvmovemess))
-        currentCommandID = self.parseResultId(recvmovemess)[1]
-        print("指令 ID:", currentCommandID)
-        #sleep(0.02)
-        while True:  #完成判断循环
-
-            print(self.feedData.RobotMode)
-            print("robotCurrentCommandID",self.feedData.robotCurrentCommandID)
-            print("currentCommandID",currentCommandID)
-            if self.feedData.RobotMode == 5 and self.feedData.robotCurrentCommandID == currentCommandID:
-                print("运动结束")
-                break
-            time.sleep(0.1)
-        
-        # Initialize gripper position (only if gripper is enabled)
-        if self._xense_gripper is not None:
-            if self.config.xense_gripper_init_open:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_max_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force,
-                )  # fully open
-            else:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_min_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force
-                )  # fully closed
-        
-        # Wait for target reached
-        while not self._robot.primitive_states()["reachedTarget"]:
-            time.sleep(0.1)
-        self._home_tcp_pose = np.array(self._robot.states().tcp_pose)
+        self._move_joint_movj(self.config.home_point_list, "home position")
+        self._initialize_gripper_position()
+        self._home_tcp_pose = self._current_tcp_pose_quat_from_feedback()
         self.logger.info(f"Home TCP pose: {self._home_tcp_pose}")
         self.logger.info("✅ Robot at home position.")
         if self._xense_gripper is not None:
@@ -474,43 +671,8 @@ class DobotNova5(Robot):
 
         self.logger.info("Moving to start position...")
 
-        # Create target joint position from config (in degrees)
-        start_jpos = self.config.start_position_degree
-
-        # 走点指令
-        recvmovemess = self._robot.MovJ(*start_jpos, 0)
-        print("MovJ:", recvmovemess)
-        print(self.parseResultId(recvmovemess))
-        currentCommandID = self.parseResultId(recvmovemess)[1]
-        print("指令 ID:", currentCommandID)
-        #sleep(0.02)
-        while True:  #完成判断循环
-
-            print(self.feedData.RobotMode)
-            if self.feedData.RobotMode == 5 and self.feedData.robotCurrentCommandID == currentCommandID:
-                print("运动结束")
-                break
-            time.sleep(0.1)
-        
-        # Initialize gripper position (only if gripper is enabled)
-        if self._xense_gripper is not None:
-            if self.config.xense_gripper_init_open:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_max_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force,
-                )  # fully open
-            else:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_min_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force
-                )  # fully closed
-        
-        # Wait for target reached
-        while not self._robot.primitive_states()["reachedTarget"]:
-            time.sleep(0.1)
-
+        self._move_joint_movj(self.config.start_position_degree, "start position")
+        self._initialize_gripper_position()
         self.logger.info("✅ Robot at start position.")
         if self._xense_gripper is not None:
             self.logger.info(f"Gripper position: {self._xense_gripper.get_gripper_position()}")
@@ -534,7 +696,13 @@ class DobotNova5(Robot):
     def get_robot_state(self) -> Optional[dict]:
         # 获取机器人状态
         while True:
-            feedInfo = self._feedFour.feedBackData()
+            if self._feedFour is None:
+                return None
+            try:
+                feedInfo = self._feedFour.feedBackData()
+            except Exception:
+                # Socket may be closing during disconnect; exit feedback thread quietly.
+                return None
             with self.__globalLockValue:
                 if feedInfo is not None:   
                     if hex((feedInfo['TestValue'][0])) == '0x123456789abcdef':
@@ -580,9 +748,9 @@ class DobotNova5(Robot):
             tcp_pose = self.feedData.tcpPose
 
             # Position (3D)
-            obs_dict["tcp.x"] = tcp_pose[0]
-            obs_dict["tcp.y"] = tcp_pose[1]
-            obs_dict["tcp.z"] = tcp_pose[2]
+            obs_dict["tcp.x"] = tcp_pose[0] / MM_PER_METER
+            obs_dict["tcp.y"] = tcp_pose[1] / MM_PER_METER
+            obs_dict["tcp.z"] = tcp_pose[2] / MM_PER_METER
 
             # Convert quaternion to 6D rotation representation
             quat = euler_to_quaternion(np.deg2rad(tcp_pose[3]), np.deg2rad(tcp_pose[4]), np.deg2rad(tcp_pose[5]))
@@ -630,11 +798,40 @@ class DobotNova5(Robot):
         if self._robot is None:
             raise RuntimeError("Robot object not created. Call connect() first or create Robot manually.")
         
-        # Compute forward kinematics
-        tcp_pose = self._robot.PositiveKin(joint_positions_deg)
+        # V4 API PositiveKin returns TCP pose in controller format:
+        # [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg].
+        response = self._robot.PositiveKin(
+            float(joint_positions_deg[0]),
+            float(joint_positions_deg[1]),
+            float(joint_positions_deg[2]),
+            float(joint_positions_deg[3]),
+            float(joint_positions_deg[4]),
+            float(joint_positions_deg[5]),
+        )
+        values = self._raise_if_dobot_error(response, "PositiveKin")
+        if len(values) < 6:
+            raise RuntimeError(
+                f"PositiveKin response missing pose values: {response.strip()}"
+            )
 
-        
-        return np.array(tcp_pose, dtype=np.float32)
+        x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg = [float(v) for v in values[:6]]
+        quat = euler_to_quaternion(
+            np.deg2rad(rx_deg),
+            np.deg2rad(ry_deg),
+            np.deg2rad(rz_deg),
+        )
+        return np.array(
+            [
+                x_mm / MM_PER_METER,
+                y_mm / MM_PER_METER,
+                z_mm / MM_PER_METER,
+                quat[0],
+                quat[1],
+                quat[2],
+                quat[3],
+            ],
+            dtype=np.float32,
+        )
 
     def get_start_tcp_pose(self) -> np.ndarray:
         """Get TCP pose at start position (from config.start_position_degree).
@@ -685,23 +882,19 @@ class DobotNova5(Robot):
         if self.config.control_mode != ControlMode.CARTESIAN_MOTION:
             raise ValueError("get_current_tcp_pose_euler requires CARTESIAN_MOTION mode")
 
-        # TODO
-        # Get current TCP pose (quaternion format)
-        states = self._robot.states()
-        tcp_pose = states.tcp_pose  # [x, y, z, qw, qx, qy, qz]
+        tcp_pose = np.asarray(self.feedData.tcpPose, dtype=np.float32)
+        gripper_pos = self._current_gripper_position()
 
-        # Convert quaternion to Euler angles
-        euler = quaternion_to_euler(tcp_pose[3], tcp_pose[4], tcp_pose[5], tcp_pose[6])
-        roll, pitch, yaw = euler[0], euler[1], euler[2]
-
-        # Get gripper position directly from XenseFlare gripper
-        gripper_pos = 0.0
-        if self._xense_gripper and self.config.use_gripper:
-            gripper_pos = self._xense_gripper.get_gripper_position()
-
-        # Return [x, y, z, roll, pitch, yaw, gripper_pos]
         return np.array(
-            [tcp_pose[0], tcp_pose[1], tcp_pose[2], roll, pitch, yaw, gripper_pos],
+            [
+                tcp_pose[0] / MM_PER_METER,
+                tcp_pose[1] / MM_PER_METER,
+                tcp_pose[2] / MM_PER_METER,
+                np.deg2rad(tcp_pose[3]),
+                np.deg2rad(tcp_pose[4]),
+                np.deg2rad(tcp_pose[5]),
+                gripper_pos,
+            ],
             dtype=np.float32,
         )
 
@@ -720,15 +913,8 @@ class DobotNova5(Robot):
         if self.config.control_mode != ControlMode.CARTESIAN_MOTION:
             raise ValueError("get_current_tcp_pose_quat requires CARTESIAN_MOTION mode")
 
-        # TODO
-        # Get current TCP pose (quaternion format)
-        states = self._robot.states()
-        tcp_pose = states.tcp_pose  # [x, y, z, qw, qx, qy, qz]
-
-        # Get gripper position directly from XenseFlare gripper
-        gripper_pos = 0.0
-        if self._xense_gripper and self.config.use_gripper:
-            gripper_pos = self._xense_gripper.get_gripper_position()
+        tcp_pose = self._current_tcp_pose_quat_from_feedback()
+        gripper_pos = self._current_gripper_position()
 
         # Return [x, y, z, qw, qx, qy, qz, gripper_pos]
         return np.array(
@@ -754,8 +940,8 @@ class DobotNova5(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Check for fault
-        if self._robot.fault():
-            raise RuntimeError("Robot fault detected. Call robot.clear_fault() or reconnect.")
+        if self.feedData.RobotMode == 9:
+            raise RuntimeError(f"Robot fault detected. GetErrorID: {self._dobot_error_detail()}")
 
         # Send robot arm action
         if self.config.control_mode == ControlMode.JOINT_MOTION:
@@ -786,17 +972,18 @@ class DobotNova5(Robot):
         target_pos = [action[key] for key in self._action_joint_keys]
 
         # Send command using API
-        self._robot.ServoJ(
+        response = self._robot.ServoJ(
             target_pos[0],
             target_pos[1],
             target_pos[2],
             target_pos[3],
             target_pos[4],
             target_pos[5],
-            self._control_frequency,
+            1.0 / self._control_frequency,
             self._aheadtime,
             self._gain,
         )
+        self._raise_if_dobot_error(response, "ServoJ")
 
         return action
 
@@ -805,11 +992,15 @@ class DobotNova5(Robot):
 
         Action keys: action.tcp.{x,y,z,r1,r2,r3,r4,r5,r6}
 
-        The action uses 6D rotation representation which is converted to quaternion
-        for the Flexiv SDK (SendCartesianMotionForce expects [x,y,z,qw,qx,qy,qz]).
+        The action uses 6D rotation representation, then converts it to Dobot's
+        ServoP Cartesian pose format [x, y, z, rx, ry, rz].
         """
         # Extract position
-        x, y, z = action["tcp.x"], action["tcp.y"], action["tcp.z"]
+        x_m, y_m, z_m = action["tcp.x"], action["tcp.y"], action["tcp.z"]
+        # LeRobot actions use meters; Dobot ServoP expects millimeters.
+        x_mm = float(x_m) * MM_PER_METER
+        y_mm = float(y_m) * MM_PER_METER
+        z_mm = float(z_m) * MM_PER_METER
 
         # Extract 6D rotation and convert to quaternion
         r6d = np.array(
@@ -827,16 +1018,23 @@ class DobotNova5(Robot):
         euler = quaternion_to_euler(
             quat[0], quat[1], quat[2], quat[3]
         )
-        print("x,y,z",x,y,z)
-        print("euler",euler)
-        # # Send command using NRT API (pure motion - no wrench parameter needed)
-        # self._robot.ServoP(
-        #     x, y, z, 
-        #     euler[0], euler[1], euler[2], 
-        #     self._control_frequency, 
-        #     self._aheadtime, 
-        #     self._gain
-        # )
+        self.logger.debug(
+            f"ServoP xyz: [{x_m:.6f}, {y_m:.6f}, {z_m:.6f}] m -> "
+            f"[{x_mm:.3f}, {y_mm:.3f}, {z_mm:.3f}] mm"
+        )
+
+        response = self._robot.ServoP(
+            x_mm,
+            y_mm,
+            z_mm,
+            float(np.rad2deg(euler[0])),
+            float(np.rad2deg(euler[1])),
+            float(np.rad2deg(euler[2])),
+            # 1.0 / self._control_frequency,
+            # self._aheadtime,
+            # self._gain,
+        )
+        self._raise_if_dobot_error(response, "ServoP")
 
         return action
 
@@ -863,19 +1061,19 @@ class DobotNova5(Robot):
         if self._robot is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # TODO
-        if not self._robot.fault():
+        if self.feedData.RobotMode != 9:
             self.logger.info("No fault to clear.")
             return True
 
-        # TODO
         self.logger.info("Attempting to clear fault...")
-        result = self._robot.ClearFault()
-        if result:
+        response = self._robot.ClearError()
+        try:
+            self._raise_if_dobot_error(response, "ClearError")
             self.logger.info("✅ Fault cleared successfully.")
-        else:
-            self.logger.error("Failed to clear fault.")
-        return result
+            return True
+        except RuntimeError as e:
+            self.logger.error(f"Failed to clear fault: {e}")
+            return False
 
     def disconnect(self) -> None:
         """Disconnect from the robot safely.
@@ -894,7 +1092,7 @@ class DobotNova5(Robot):
             return
 
         try:
-            self.logger.info("Disconnecting from Flexiv robot...")
+            self.logger.info("Disconnecting from Dobot Nova5 robot...")
 
             # Move to home position before disconnecting
             try:
@@ -905,6 +1103,9 @@ class DobotNova5(Robot):
             # Stop any ongoing motion
             if self._robot is not None:
                 self._robot.Stop()
+                self._robot.close()
+            if self._feedFour is not None:
+                self._feedFour.close()
 
             # Disconnect XenseFlare (provides gripper + camera + sensors)
             if self._xense_gripper and self.config.use_gripper:
@@ -918,7 +1119,8 @@ class DobotNova5(Robot):
             self.logger.error(f"Error during disconnect: {e}")
         finally:
             self._robot = None
+            self._feedFour = None
             self._xense_gripper = None
             self._is_connected = False
             self._current_mode = None
-            self.logger.info("✅ Flexiv Rizon4 disconnected.")
+            self.logger.info("✅ Dobot Nova5 disconnected.")

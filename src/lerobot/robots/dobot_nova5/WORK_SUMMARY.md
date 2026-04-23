@@ -1,62 +1,75 @@
-# Dobot Nova5 接入阶段性工作总结
+# Dobot Nova5 接入工作总结（更新于 2026-04-23）
 
-在 `robots` 目录下新增了 Dobot Nova5 机器人接入代码，当前阶段以官方文档为主要依据完成接口设计与代码骨架搭建。由于暂时没有真机，部分接口处于占位或待验证状态。
+## 概览
 
-## 已完成的工作
+`dobot_nova5` 模块已从“骨架阶段”进入“真机联调与稳定性修复阶段”。  
+本轮重点围绕 `lerobot-teleoperate + pico4` 打通连接、启动位姿、实时控制与异常处理链路，并完成了关键兼容问题修复。
 
-- 已经把最难的“接口边界定义、控制模式抽象、数据结构对齐、外设抽象”打通。
-- 后续接入真机时，主要工作会从“架构设计”转为“字段对齐 + 时序调试 + 稳定性验证”，整体风险和改动范围都更可控。
+---
 
-### 1) 新建并组织了 Dobot Nova5 相关模块
-- `src/lerobot/robots/dobot_nova5/dobot_nova5.py`
-- `src/lerobot/robots/dobot_nova5/config_dobot_nova5.py`
-- `src/lerobot/robots/dobot_nova5/xense_gripper.py`
-- `src/lerobot/robots/dobot_nova5/config_xense_gripper.py`
-- `src/lerobot/robots/dobot_nova5/__init__.py`
-- `src/lerobot/robots/dobot_nova5/TCP_IP_Python_V4/*`（官方 TCP/IP Python 示例与接口文件）
+## 已完成的核心工作
 
-### 2) 完成了机器人配置层设计
-- 注册了 `RobotConfig` 子类：`dobot_nova5`。
-- 定义了控制模式枚举：关节控制和笛卡尔控制。
-- 暴露了核心参数：
-  - 机器人通信参数（IP、端口、控制频率）
-  - 起始位姿参数（`start_position_degree`、`start_vel_scale`）
-  - 夹爪参数（开合范围、速度、力度、开机初始化行为）
-  - 触觉传感器映射参数（SN 到特征名）
-  - 相机参数入口（`cameras`）
-- 在 `__post_init__` 中加入了关键参数校验逻辑（长度范围、取值区间等）。
+### 1) 控制链路与连接流程稳定化
 
-### 3) 完成了机器人主类骨架与核心流程
-- 基于 `Robot` 抽象类实现了 `DobotNova5`。
-- 完成了动作/观测特征定义逻辑（随控制模式切换）。
-- 完成了连接主流程框架：
-  - 建立 Dashboard/Feedback 接口
-  - 使能机器人
-  - 启动反馈线程
-  - 故障检查与清理流程骨架
-  - 可选回零/回起始位姿
-  - 外设（夹爪、相机）连接
-- 实现了主要控制接口框架：
-  - `send_action`
-  - `_send_joint_position_action`
-  - `_send_cartesian_pure_motion_action`
-  - `_send_gripper_action`
-  - `disconnect`
-- 实现了与姿态表示相关的转换路径（四元数、欧拉角、6D 旋转表示）。
+- 完成 `connect()` 关键链路稳态处理：
+  - 反馈线程启动与首帧等待（避免状态未就绪就执行控制逻辑）。
+  - 连接前错误态检测（`RobotMode=9`）与 `ClearError()` 自动清故障。
+  - `EnableRobot()` 返回值与 `RobotMode()` 联合判定，避免误判导致中断。
+- 完成启动运动与等待逻辑重构：
+  - 统一使用 `SpeedFactor` + `MovJ` 启动关节运动。
+  - 增加基于 command id 与关节误差双重兜底的结束判定。
+  - 增加超时与错误模式硬退出，避免无限等待卡死。
 
-### 4) 完成了 Xense 夹爪集成封装
-- 实现了夹爪连接/断开流程。
-- 实现了夹爪位置读写（归一化到 `[0, 1]`）。
-- 实现了触觉传感器扫描、连接与数据读取。
-- 支持将传感器 SN 映射为训练/记录使用的语义键名。
+### 2) V4 API 规范化（按当前固件）
 
-## 当前状态
-- 代码已经完成了“可扩展骨架 + 主要接口定义 + 外设集成框架”。
-- 设计方向清晰，和 LeRobot 的抽象接口保持一致。
-- 当前实现属于“文档驱动开发阶段”，距离“真机稳定运行阶段”还差最后一轮接口实测和联调。
+- 启动关节运动切回 V4 标准接口调用：
+  - 使用 `DobotApiDashboard.MovJ(..., coordinateMode=1, v=...)`。
+  - 去掉了此前用于兼容的 `sendRecvMsg("JointMovJ(...)")`/旧语法路径。
+- `forward_kinematics` 修正为 V4 `PositiveKin(j1..j6)` 规范调用与解析。
 
-## 目前待补齐或待真机验证的部分
-- `get_observation` 中的部分反馈字段映射仍是占位逻辑，需要根据真实反馈包补齐。
-- 部分故障处理与状态判定逻辑需要实机确认（尤其是机器人模式码与端口行为）。
-- 部分函数中仍有 `TODO`，需要在真机联调时落地具体实现。
-- 当前文件存在语法层面的占位残留，`py_compile` 会在 `dobot_nova5.py` 的观测分支处报错（注释占位导致代码块不完整）。
+### 3) 错误处理与可观测性增强
+
+- 新增统一响应解析与异常抛出机制：
+  - `_parse_dobot_response`
+  - `_raise_if_dobot_error`
+  - `_dobot_error_detail`
+- 异常信息中补充 `GetErrorID`，定位更直接。
+- 增加等待阶段周期日志，便于观察 `RobotMode`、`CurrentCommandId`、关节误差等状态演化。
+
+### 4) Pico4 联调关键修复（单位一致性）
+
+- 明确并修复单位链路：
+  - Pico/LeRobot 动作位置单位为 `m`。
+  - Dobot `ServoP` 与反馈 `ToolVectorActual` 的 xyz 为 `mm`。
+- 已完成统一换算：
+  - 下发 `ServoP` 时 `m -> mm`。
+  - 反馈/观测与 `get_current_tcp_pose_*` 输出统一为 `m`。
+- 修复后现象从“旋转可动、平移几乎不动”恢复到正常比例平移。
+
+### 5) 资源管理与断开流程改进
+
+- `disconnect()` 中增加 Dashboard/Feedback 连接关闭逻辑。
+- 反馈线程在 socket 关闭场景下可安全退出，降低退出阶段报错概率。
+
+### 6) 文档化
+
+- 新增故障排查文档：
+  - `src/lerobot/robots/dobot_nova5/PICO4_DOBOT_NOVA5_TROUBLESHOOTING.md`
+- 文档覆盖：典型报错、根因分析、修复点、验证步骤与临时绕过方案。
+
+---
+
+## 当前状态判断
+
+- `dobot_nova5.py` 已具备真机可用的连接与基础 teleop 控制路径。
+- 关键历史问题（启动卡死、错误态处理薄弱、V4 调用不规范、m/mm 单位错配）已完成修复。
+- 当前重点已从“接口搭建”转为“稳定性与参数细化”。
+
+---
+
+## 仍需继续验证/优化
+
+1. 启动位姿在不同工况下的可达性与稳健性（避免偶发逆解/轨迹失败）。
+2. `ServoP/ServoJ` 控制参数（`t/aheadtime/gain`）在不同频率和负载下的跟踪性能调优。
+3. 观测字段完整性与噪声鲁棒性（包括相机、夹爪、触觉数据联动场景）。
+4. 异常恢复策略在连续运行下的长期稳定性（多次 enable/disable、断开重连、故障注入）。

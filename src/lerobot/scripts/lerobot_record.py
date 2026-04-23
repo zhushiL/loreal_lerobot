@@ -77,6 +77,7 @@ from lerobot.teleoperators import (  # noqa: F401
     gamepad,
     make_teleoperator_from_config,
     pico4,
+    pico4_hand,
     trlc_leader,
 )
 from lerobot.utils.robot_utils import emergency_stop_flexiv_rt_robot

@@ -207,6 +207,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     mock_teleop,
     pico4,
+    pico4_hand,
     spacemouse,
     vive_tracker,
     xense_flare,

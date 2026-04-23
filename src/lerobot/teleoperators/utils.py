@@ -58,6 +58,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .pico4 import Pico4
 
         return Pico4(config)
+    elif config.type == "pico4_hand":
+        from .pico4_hand import Pico4Hand
+
+        return Pico4Hand(config)
     elif config.type == "bi_pico4":
         from .bi_pico4 import BiPico4
 

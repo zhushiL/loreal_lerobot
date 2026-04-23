@@ -445,6 +445,50 @@ Adjust `--robot.preview_time` to reduce jittering:
 - 0.01-0.02s: More responsive, but may cause jittering
 - 0.0: No preview (only for teleoperation/recording)
 
+
+## Franka robot lerobot-teleoperate command
+
+```python
+lerobot-teleoperate \
+  --robot.type=pylibfranka_research3 \
+  --robot.control_mode=cartesian_impedance \
+  --teleop.type=pico4 \
+  --fps=30 \
+  --debug_timing=false \
+  --display_data=true
+  --dryrun=true
+```
+
+### Example (Franka research3 + Pico4):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=pylibfranka_research3 \
+    --teleop.type=pico4 \
+    --fps=30 \
+    --display_data=true
+```
+
+### Example (Franka research3 + SpaceMouse):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=pylibfranka_research3 \
+    --teleop.type=spacemouse \
+    --fps=30 \
+    --display_data=true
+```
+
+### Example (Franka research3 + BtGamepad):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=pylibfranka_research3 \
+    --teleop.type=btgamepad \
+    --fps=30 \
+    --display_data=true
+```
+
 ## Franka robot lerobot-record command
 
 ```python

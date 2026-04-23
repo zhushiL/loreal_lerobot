@@ -142,7 +142,7 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-Example (Flexiv Rizon4 RT + Pico4):
+Example (Franka research3 + Pico4):
 
 ```shell
 lerobot-teleoperate \
@@ -152,13 +152,15 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-Example (Flexiv Rizon4 RT + SpaceMouse):
+Example (Franka research3 + SpaceMouse):
 
+```shell
 lerobot-teleoperate \
     --robot.type=pylibfranka_research3 \
     --teleop.type=spacemouse \
     --fps=30 \
     --display_data=true
+```
 
 Example (Franka research3 + BtGamepad):
 

@@ -87,12 +87,10 @@ class DobotNova5Config(RobotConfig):
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
 
-    home_point_list = [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
+    home_point_list = [270, 0, 90, 0, -90, 0]
     # Start position parameters (for MoveJ primitive)
     # Joint positions in degrees (factory-defined home position)
-    start_position_degree: list[float] = field(
-        default_factory=lambda: [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
-    )
+    start_position_degree: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
 

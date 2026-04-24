@@ -182,6 +182,18 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
+Example (BiDobot Nova5 + BiPico4):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=bi_dobot_nova5 \
+    --robot.left_robot_ip=192.168.5.101 \
+    --robot.right_robot_ip=192.168.5.102 \
+    --teleop.type=bi_pico4 \
+    --fps=30 \
+    --display_data=true\
+    --dryrun=true
+```
 
 """
 
@@ -200,6 +212,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     arx5_follower,
     bi_arx5,
+    bi_dobot_nova5,
     bi_flexiv_rizon4_rt,
     flexiv_rizon4,
     flexiv_rizon4_rt,
@@ -1343,9 +1356,21 @@ def bi_pico4_teleop_loop(
                     )
                 elif hasattr(robot, "reset_to_initial_position"):
                     robot.reset_to_initial_position()
-                    logger.info(
-                        "Reset to initial position (A button) — RT non-blocking"
-                    )
+                    is_rt_moving = hasattr(robot, "rt_moving") and bool(robot.rt_moving)
+                    if is_rt_moving:
+                        logger.info(
+                            "Reset to initial position (A button) — RT non-blocking"
+                        )
+                    else:
+                        # Blocking reset path (e.g., bi_dobot_nova5):
+                        # sync teleop target now to avoid stale pre-reset target being resent.
+                        left_pose, right_pose = robot.get_current_tcp_pose_quat()
+                        teleop.reset_to_pose(
+                            left_pose[:7], right_pose[:7], left_pose[7], right_pose[7]
+                        )
+                        logger.info(
+                            "Reset to initial position (A button) — synced teleop target immediately"
+                        )
             except Exception as e:
                 logger.error(
                     f"Failed to reset robot position: {e}\n{traceback.format_exc()}"
@@ -2325,6 +2350,50 @@ def teleoperate(cfg: TeleoperateConfig):
                     _teleop_fut = _ex.submit(teleop.pre_init)
                     _teleop_fut.result()   # raise immediately if VR SDK fails
                     _robot_fut.result()    # raise immediately if robot fails
+            except KeyboardInterrupt:
+                logger.info("Startup interrupted by user")
+                raise
+
+            left_pose, right_pose = robot.get_current_tcp_pose_quat()
+            logger.info(f"Left start pose:  {left_pose}")
+            logger.info(f"Right start pose: {right_pose}")
+            teleop.connect(left_tcp_pose_quat=left_pose, right_tcp_pose_quat=right_pose)
+            try:
+                bi_pico4_teleop_loop(
+                    teleop=teleop,
+                    robot=robot,
+                    fps=cfg.fps,
+                    display_data=cfg.display_data,
+                    duration=cfg.teleop_time_s,
+                    dryrun=cfg.dryrun,
+                    debug_timing=cfg.debug_timing,
+                )
+            except KeyboardInterrupt:
+                logger.info("Teleoperation interrupted by user")
+
+        # --- bi_dobot_nova5 + bi_pico4 ---
+        elif cfg.robot.type == "bi_dobot_nova5" and cfg.teleop.type == "bi_pico4":
+            logger.info("Detected BiDobotNova5 + BiPico4")
+            robot = make_robot_from_config(cfg.robot)
+            teleop = make_teleoperator_from_config(cfg.teleop)
+
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
+                ControlMode as BiDobotNova5ControlMode,
+            )
+
+            if robot.config.control_mode != BiDobotNova5ControlMode.CARTESIAN_MOTION:
+                raise ValueError(
+                    f"BiPico4 teleoperation requires CARTESIAN_MOTION mode, "
+                    f"but robot is configured with {robot.config.control_mode}"
+                )
+
+            try:
+                with _TPE(max_workers=2) as _ex:
+                    _robot_fut = _ex.submit(robot.connect, go_to_start=True)
+                    _teleop_fut = _ex.submit(teleop.pre_init)
+                    _teleop_fut.result()
+                    _robot_fut.result()
             except KeyboardInterrupt:
                 logger.info("Startup interrupted by user")
                 raise

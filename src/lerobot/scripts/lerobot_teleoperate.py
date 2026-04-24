@@ -2469,7 +2469,6 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop = make_teleoperator_from_config(cfg.teleop)
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
-
             from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
                 ControlMode as BiDobotNova5ControlMode,
             )

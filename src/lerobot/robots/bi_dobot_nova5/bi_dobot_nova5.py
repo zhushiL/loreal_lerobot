@@ -56,19 +56,21 @@ from lerobot.utils.robot_utils import (
     get_logger,
     quaternion_to_euler,
     quaternion_to_rotation_6d,
+    euler_to_quaternion,
     rotation_6d_to_quaternion,
 )
 
 # Alias for dobot_api.Mode for convenience
-Mode = DobotApiDashboard.RequestControl()
+# Mode = DobotApiDashboard.RequestControl()
 
 # Constants from dobot_api
 JOINT_DOF = 6  # Dobot Nova5 robot joint DOF
+MM_PER_METER = 1000.0
 
-class BiDobotNova5(Robot):
-    """BiDobot Nova5 6-DOF collaborative robot.
+class DobotNova5(Robot):
+    """Dobot Nova5 6-DOF collaborative robot.
 
-    This class implements the LeRobot Robot interface for the BiDobot Nova5 robot,
+    This class implements the LeRobot Robot interface for the Dobot Nova5 robot,
     supporting two control modes for joint space and Cartesian space control.
 
     Control Modes (NRT only for Python API):
@@ -80,12 +82,14 @@ class BiDobotNova5(Robot):
         >>> from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import BiDobotNova5Config, ControlMode
         >>> # Joint motion control
         >>> config = BiDobotNova5Config(
-        ...     robot_ip="192.168.1.1",
+        ...     left_robot_ip="192.168.5.101",
+        ...     right_robot_ip="192.168.5.102",
         ...     control_mode=ControlMode.JOINT_MOTION,
         ... )
         >>> # Cartesian motion control
         >>> config = BiDobotNova5Config(
-        ...     robot_ip="192.168.1.1",
+        ...     left_robot_ip="192.168.5.101",
+        ...     right_robot_ip="192.168.5.102",
         ...     control_mode=ControlMode.CARTESIAN_MOTION,
         ... )
         >>> robot = BiDobotNova5(config)
@@ -107,9 +111,14 @@ class BiDobotNova5(Robot):
 
         # Robot interface (initialized on connect)
         # Note: Python API only supports NRT (Non-Real-Time) modes, no Scheduler needed
-        self._robot: DobotApiDashboard | None = None
-        self._feedInfo = []
-        self.__globalLockValue = threading.Lock()
+        self._left_robot: DobotApiDashboard | None = None
+        self._right_robot: DobotApiDashboard | None = None
+        self._left_feedFour: DobotApiFeedBack | None = None
+        self._right_feedFour: DobotApiFeedBack | None = None
+        self._left_feedInfo = []
+        self._right_feedInfo = []
+        self.__left_globalLockValue = threading.Lock()
+        self.__right_globalLockValue = threading.Lock()
 
         class item:
             def __init__(self):
@@ -119,25 +128,39 @@ class BiDobotNova5(Robot):
                 self.DigitalInputs =-1
                 self.DigitalOutputs = -1
                 self.robotCurrentCommandID = -1
+                self.tcpPose = [ 258.1406287 ,  -78.59815584, 734.56544667, -171.70077286,    4.8702051,  -84.81002799]
+                self.qActual = [ 11.71805878,   23.65214996,  -77.142659,    -27.70232162, -266.17571411,    7.17711411]
                 # 自定义添加所需反馈数据
 
-        self.feedData = item()  # 定义结构对象
+        self.left_feedData = item()  # 定义结构对象
+        self.right_feedData = item() 
 
-        self._is_connected = False
+        self._left_is_connected = False
+        self._right_is_connected = False
 
-        self._xense_gripper: Gripper | None = None
-        if config.use_gripper:
-            self._xense_gripper = Gripper(config.xense_gripper)
+        self._xense_left_gripper: Gripper | None = None
+        self._xense_right_gripper: Gripper | None = None
+        if config.use_left_gripper:
+            self._xense_left_gripper = Gripper(config.xense_left_gripper)
+        if config.use_right_gripper:
+            self._xense_right_gripper = Gripper(config.xense_right_gripper)
+        if not config.use_left_gripper:
+            self._xense_left_gripper = None
+        if not config.use_right_gripper:
+            self._xense_right_gripper = None
 
         # Control state - stores the current dobot_api.Mode
-        self._current_mode = None
+        self._left_current_mode = None
+        self._right_current_mode = None
 
         # Home TCP pose - stored after moving to home position
         # Format: [x, y, z, qw, qx, qy, qz] (7D) - SDK format with quaternion
-        self._home_tcp_pose: np.ndarray | None = None
+        self._left_home_tcp_pose: np.ndarray | None = None
+        self._right_home_tcp_pose: np.ndarray | None = None
 
         # Gripper key (1D) - always used
-        self._gripper_key = "gripper.pos"
+        self._left_gripper_key = "left_gripper.pos"
+        self._right_gripper_key = "right_gripper.pos"
 
         # Initialize keys and buffers based on control mode
         if config.control_mode == ControlMode.JOINT_MOTION:
@@ -153,10 +176,12 @@ class BiDobotNova5(Robot):
     def _init_joint_mode(self) -> None:
         """Initialize keys and buffers for joint motion control mode."""
         # Joint state observation keys: joint_{1-6}.{pos, vel, effort}
-        self._joint_pos_keys = tuple(f"joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
+        self._left_joint_pos_keys = tuple(f"left_joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
+        self._right_joint_pos_keys = tuple(f"right_joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
 
         # Joint action keys: joint_{1-6}.pos
-        self._action_joint_keys = tuple(f"joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
+        self._left_action_joint_keys = tuple(f"left_joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
+        self._right_action_joint_keys = tuple(f"right_joint_{i}.pos" for i in range(1, JOINT_DOF + 1))
 
         # Pre-cache config values as lists (for API calls)
         self._control_frequency = self.config.control_frequency
@@ -175,20 +200,32 @@ class BiDobotNova5(Robot):
         """
         # TCP pose observation/action keys: tcp.{x, y, z, r1, r2, r3, r4, r5, r6}
         # 6D rotation: r1-r3 = first column, r4-r6 = second column of rotation matrix
-        self._tcp_pose_keys = (
-            "tcp.x",
-            "tcp.y",
-            "tcp.z",
-            "tcp.r1",
-            "tcp.r2",
-            "tcp.r3",
-            "tcp.r4",
-            "tcp.r5",
-            "tcp.r6",
+        self._left_tcp_pose_keys = (
+            "left_tcp.x",
+            "left_tcp.y",
+            "left_tcp.z",
+            "left_tcp.r1",
+            "left_tcp.r2",
+            "left_tcp.r3",
+            "left_tcp.r4",
+            "left_tcp.r5",
+            "left_tcp.r6",
+        )
+        self._right_tcp_pose_keys = (
+            "right_tcp.x",
+            "right_tcp.y",
+            "right_tcp.z",
+            "right_tcp.r1",
+            "right_tcp.r2",
+            "right_tcp.r3",
+            "right_tcp.r4",
+            "right_tcp.r5",
+            "right_tcp.r6",
         )
 
         # TCP pose action keys (same as observation keys for 6D rotation)
-        self._action_tcp_pose_keys = self._tcp_pose_keys
+        self._left_action_tcp_pose_keys = self._left_tcp_pose_keys
+        self._right_action_tcp_pose_keys = self._right_tcp_pose_keys
 
         # Pre-cache config values as lists (for API calls)
         self._control_frequency = self.config.control_frequency
@@ -207,17 +244,20 @@ class BiDobotNova5(Robot):
 
         if self.config.control_mode == ControlMode.JOINT_MOTION:
             # Joint positions (7D)
-            features.update(dict.fromkeys(self._action_joint_keys, float))
+            features.update(dict.fromkeys(self._left_action_joint_keys, float))
+            features.update(dict.fromkeys(self._right_action_joint_keys, float))
 
         elif self.config.control_mode == ControlMode.CARTESIAN_MOTION:
             # TCP pose (9D: xyz + 6D rotation)
-            features.update(dict.fromkeys(self._action_tcp_pose_keys, float))
+            features.update(dict.fromkeys(self._left_action_tcp_pose_keys, float))
+            features.update(dict.fromkeys(self._right_action_tcp_pose_keys, float))
 
         else:
             raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
 
         # Always include gripper (1D)
-        features[self._gripper_key] = float
+        features[self._left_gripper_key] = float
+        features[self._right_gripper_key] = float
         return features
 
     @property
@@ -232,17 +272,20 @@ class BiDobotNova5(Robot):
 
         if self.config.control_mode == ControlMode.JOINT_MOTION:
             # Joint positions (7D)
-            features.update(dict.fromkeys(self._joint_pos_keys, float))
+            features.update(dict.fromkeys(self._left_joint_pos_keys, float))
+            features.update(dict.fromkeys(self._right_joint_pos_keys, float))
 
         elif self.config.control_mode == ControlMode.CARTESIAN_MOTION:
             # TCP pose (9D: xyz + 6D rotation)
-            features.update(dict.fromkeys(self._tcp_pose_keys, float))
+            features.update(dict.fromkeys(self._left_tcp_pose_keys, float))
+            features.update(dict.fromkeys(self._right_tcp_pose_keys, float))
 
         else:
             raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
 
         # Always include gripper position (1D)
-        features[self._gripper_key] = float
+        features[self._left_gripper_key] = float
+        features[self._right_gripper_key] = float
         return features
 
     @property
@@ -250,21 +293,12 @@ class BiDobotNova5(Robot):
         """Return camera/image features from Xense Gripper and external cameras."""
         features = {}
 
-        if self._xense_gripper and self.config.use_gripper:
-            features["left_tactile"] = (
-                self._xense_gripper._config.rectify_size[1],
-                self._xense_gripper._config.rectify_size[0],
+        for cam_name in self.cameras:
+            features[cam_name] = (
+                self.config.cameras[cam_name].height,
+                self.config.cameras[cam_name].width,
                 3,
             )
-            features["right_tactile"] = (
-                self._xense_gripper._config.rectify_size[1],
-                self._xense_gripper._config.rectify_size[0],
-                3,
-            )
-
-        # External cameras (e.g., scene cameras)
-        for cam in self.cameras:
-            features[cam] = (self.config.cameras[cam].height, self.config.cameras[cam].width, 3)
 
         return features
 
@@ -281,8 +315,10 @@ class BiDobotNova5(Robot):
     @property
     def is_connected(self) -> bool:
         return (
-            self._is_connected
-            and self._robot is not None
+            self._left_is_connected
+            and self._right_is_connected
+            and self._left_robot is not None
+            and self._right_robot is not None
             and all(cam.is_connected for cam in self.cameras.values())
         )
 
@@ -303,18 +339,253 @@ class BiDobotNova5(Robot):
 
         self.logger.info(f"Configuring robot for {self.config.control_mode.value} mode...")
 
-    def parseResultId(self, valueRecv):
-        # 解析返回值，确保机器人在 TCP 控制模式
-        if "Not Tcp" in valueRecv:
-            print("Control Mode Is Not Tcp")
-            return [1]
-        return [int(num) for num in re.findall(r'-?\d+', valueRecv)] or [2]
+    def _parse_dobot_response(self, value_recv: str) -> tuple[int, list[str]]:
+        """Parse Dobot TCP response: ErrorID,{ResultID or values},Command(...);"""
+        if not isinstance(value_recv, str):
+            raise RuntimeError(f"Invalid Dobot response type: {type(value_recv).__name__}")
+
+        if "Not Tcp" in value_recv:
+            raise RuntimeError("Robot is not in TCP control mode")
+
+        match = re.match(r"\s*(-?\d+)\s*,\s*\{([^}]*)\}", value_recv)
+        if match is None:
+            raise RuntimeError(f"Could not parse Dobot response: {value_recv!r}")
+
+        error_id = int(match.group(1))
+        values = [value.strip() for value in match.group(2).split(",") if value.strip()]
+        return error_id, values
+
+    def _dobot_error_detail(self) -> str:
+        if self._left_robot is None or self._right_robot is None:
+            return ""
+        try:
+            return self._left_robot.GetErrorID().strip() + " " + self._right_robot.GetErrorID().strip()
+        except Exception as e:
+            return f"failed to read GetErrorID: {e}"
+
+    def _raise_if_dobot_error(self, robot: DobotApiDashboard, response: str, command_name: str) -> list[str]:
+        error_id, values = self._parse_dobot_response(response)
+        if error_id == 0:
+            return values
+
+        message = f"{command_name} failed with ErrorID {error_id}: {response.strip()}"
+        error_detail = self._dobot_error_detail()
+        if error_detail:
+            message = f"{message}; GetErrorID: {error_detail}"
+        raise RuntimeError(message)
+
+    def _wait_for_command(self, command_id: int, description: str, timeout_s: float = 60.0) -> None:
+        start_time = time.time()
+        last_log_time = 0.0
+        command_id = int(command_id)
+
+        while True:
+            left_robot_mode = int(self.left_feedData.RobotMode)
+            left_current_command_id = int(self.left_feedData.robotCurrentCommandID)
+            right_robot_mode = int(self.right_feedData.RobotMode)
+            right_current_command_id = int(self.right_feedData.robotCurrentCommandID)
+            if left_robot_mode == 9 or right_robot_mode == 9:
+                raise RuntimeError(
+                    f"{description} failed: robot entered error mode while waiting for command "
+                    f"{command_id}. GetErrorID: {self._dobot_error_detail()}"
+                )
+
+            if left_robot_mode == 5 and left_current_command_id == command_id and right_robot_mode == 5 and right_current_command_id == command_id:
+                return
+
+            now = time.time()
+            if now - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Timed out waiting for {description}: target command ID={command_id}, "
+                    f"current command ID={left_current_command_id}, RobotMode={left_robot_mode}"
+                    f"current command ID={right_current_command_id}, RobotMode={right_robot_mode}"
+                )
+
+            if now - last_log_time >= 2.0:
+                self.logger.info(
+                    f"Waiting for {description}: RobotMode={left_robot_mode}, "
+                    f"CurrentCommandId={left_current_command_id}, target={command_id}",
+                    f"RobotMode={right_robot_mode}, "
+                    f"CurrentCommandId={right_current_command_id}, target={command_id}"
+                )
+                last_log_time = now
+
+            time.sleep(0.1)
+
+    def _wait_for_joint_target(
+        self,
+        target_joint_deg: list[float],
+        description: str,
+        tolerance_deg: float = 0.5,
+        timeout_s: float = 60.0,
+    ) -> None:
+        target = np.asarray(target_joint_deg, dtype=np.float64)
+        start_time = time.time()
+        last_log_time = 0.0
+
+        while True:
+            left_robot_mode = int(self.left_feedData.RobotMode)
+            right_robot_mode = int(self.right_feedData.RobotMode)
+            left_current_joint = np.asarray(self.left_feedData.qActual, dtype=np.float64)
+            right_current_joint = np.asarray(self.right_feedData.qActual, dtype=np.float64)
+            left_max_abs_error = float(np.max(np.abs(left_current_joint - target)))
+            right_max_abs_error = float(np.max(np.abs(right_current_joint - target)))
+
+            if left_robot_mode == 9 or right_robot_mode == 9:
+                raise RuntimeError(
+                    f"{description} failed: left robot entered error mode. "
+                    f"GetErrorID: {self._dobot_error_detail()}"
+                )
+
+            if left_robot_mode == 5 and left_max_abs_error <= tolerance_deg and right_robot_mode == 5 and right_max_abs_error <= tolerance_deg:
+                return
+
+            now = time.time()
+            if now - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Timed out waiting for {description}: left max_joint_error={left_max_abs_error:.3f} deg, right max_joint_error={right_max_abs_error:.3f} deg, "
+                    f"RobotMode={left_robot_mode}, target={target.tolist()}, current={left_current_joint.tolist()}",
+                    f"RobotMode={right_robot_mode}, target={target.tolist()}, current={right_current_joint.tolist()}"
+                )
+
+            if now - last_log_time >= 2.0:
+                self.logger.info(
+                    f"Waiting for {description}: RobotMode={left_robot_mode}, "
+                    f"max_joint_error={left_max_abs_error:.3f} deg",
+                    f"RobotMode={right_robot_mode}, target={target.tolist()}, current={right_current_joint.tolist()}"
+                )
+                last_log_time = now
+
+            time.sleep(0.1)
+
+    def _wait_for_first_feedback(self, timeout_s: float = 3.0) -> None:
+        start_time = time.time()
+        while self.left_feedData.MessageSize == -1 and self.left_feedData.RobotMode == -1 and self.right_feedData.MessageSize == -1 and self.right_feedData.RobotMode == -1:
+            if time.time() - start_time > timeout_s:
+                return
+            time.sleep(0.02)
+
+    def _wait_until_not_error_mode(self, timeout_s: float = 10.0) -> None:
+        start_time = time.time()
+        while int(self.left_feedData.RobotMode) == 9 and int(self.right_feedData.RobotMode) == 9:
+            if time.time() - start_time > timeout_s:
+                raise TimeoutError(
+                    f"Robot stays in error mode (RobotMode=9) after ClearError. "
+                    f"GetErrorID: {self._dobot_error_detail()}"
+                )
+            time.sleep(0.1)
+
+    def _send_movj_joint_v4(self, robot: DobotApiDashboard, joint_degrees: list[float]) -> str:
+        if robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        # V4 standard API: MovJ with coordinateMode=1 (joint target).
+        # Use per-command velocity scale from config.start_vel_scale.
+        target = [float(value) for value in joint_degrees]
+        return robot.MovJ(
+            target[0],
+            target[1],
+            target[2],
+            target[3],
+            target[4],
+            target[5],
+            1,  # coordinateMode=1 -> joint
+            v=int(self.config.start_vel_scale),
+        )
+
+    def _move_joint_movj(self, robot: DobotApiDashboard, joint_degrees: list[float], description: str) -> None:
+        if robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        target = [float(value) for value in joint_degrees]
+        self._raise_if_dobot_error(
+            robot.SpeedFactor(int(self.config.start_vel_scale)),
+            "SpeedFactor",
+        )
+        response = self._send_movj_joint_v4(robot, target)
+        self.logger.info(f"{description} MovJ(joint) response: {response.strip()}")
+        values = self._raise_if_dobot_error(robot, response, "MovJ(joint)")
+        command_name = "MovJ(joint)"
+
+        if values:
+            try:
+                command_id = int(float(values[0]))
+                self._wait_for_command(command_id, description)
+                return
+            except (ValueError, TypeError):
+                self.logger.warn(
+                    f"{command_name} response did not provide a valid command ID ({values}), "
+                    "falling back to joint-error completion check."
+                )
+
+        self._wait_for_joint_target(target, description)
+
+    def _initialize_gripper_position(self) -> None:
+        if self._xense_left_gripper is None or self._xense_right_gripper is None:
+            return
+
+        if self.config.left_gripper_init_open:
+            self._xense_left_gripper._gripper.set_position_sync(
+                self.config.left_gripper_max_pos,
+                vmax=self.config.left_gripper_velocity,
+                fmax=self.config.left_gripper_force,
+            )
+        else:
+            self._xense_left_gripper._gripper.set_position_sync(
+                self.config.left_gripper_min_pos,
+                vmax=self.config.left_gripper_velocity,
+                fmax=self.config.left_gripper_force,
+            )
+        if self.config.right_gripper_init_open:
+            self._xense_right_gripper._gripper.set_position_sync(
+                self.config.right_gripper_max_pos,
+                vmax=self.config.right_gripper_velocity,
+                fmax=self.config.right_gripper_force,
+            )
+        else:
+            self._xense_right_gripper._gripper.set_position_sync(
+                self.config.right_gripper_min_pos,
+                vmax=self.config.right_gripper_velocity,
+                fmax=self.config.right_gripper_force,
+            )
+
+    def _current_gripper_position(self) -> float:
+        if self._xense_left_gripper and self.config.use_left_gripper:
+            return float(self._xense_left_gripper.get_gripper_position())
+        if self._xense_right_gripper and self.config.use_right_gripper:
+            return float(self._xense_right_gripper.get_gripper_position())
+        return 0.0
+
+    def _current_tcp_pose_quat_from_feedback(self) -> np.ndarray:
+        left_tcp_pose = np.asarray(self.left_feedData.tcpPose, dtype=np.float64)
+        right_tcp_pose = np.asarray(self.right_feedData.tcpPose, dtype=np.float64)
+        # Dobot feedback uses mm for xyz. Convert to meters for teleop stack.
+        left_pos_m = left_tcp_pose[:3] / MM_PER_METER
+        left_quat = euler_to_quaternion(
+            np.deg2rad(left_tcp_pose[3]),
+            np.deg2rad(left_tcp_pose[4]),
+            np.deg2rad(left_tcp_pose[5]),
+        )
+        left_pose = np.array(
+            [left_pos_m[0], left_pos_m[1], left_pos_m[2], left_quat[0], left_quat[1], left_quat[2], left_quat[3]],
+            dtype=np.float32,
+        )
+        right_pos_m = right_tcp_pose[:3] / MM_PER_METER
+        right_quat = euler_to_quaternion(
+            np.deg2rad(right_tcp_pose[3]),
+            np.deg2rad(right_tcp_pose[4]),
+            np.deg2rad(right_tcp_pose[5]),
+        )
+        right_pose = np.array(
+            [right_pos_m[0], right_pos_m[1], right_pos_m[2], right_quat[0], right_quat[1], right_quat[2], right_quat[3]],
+            dtype=np.float32,
+        )
+        return left_pose, right_pose
 
     def connect(self, calibrate: bool = False, go_to_start: bool = True) -> None:
-        """Connect to the BiDobot Nova5 robot.
+        """Connect to the Dobot Nova5 robot.
 
         Args:
-            calibrate: Ignored (BiDobot Nova5 robots are factory calibrated)
+            calibrate: Ignored (Dobot Nova5 robots are factory calibrated)
             go_to_start: If provided, overrides config.go_to_start. If None, uses config.go_to_start.
         """
         if self.is_connected:
@@ -323,24 +594,14 @@ class BiDobotNova5(Robot):
             )
 
         try:
-            self.logger.info(f"Connecting to BiDobot Nova5 robot: {self.config.robot_sn}")
+            self.logger.info(f"Connecting to Dobot Nova5 robot: {self.config.left_robot_ip}")
+            self.logger.info(f"Connecting to Dobot Nova5 robot: {self.config.right_robot_ip}")
 
             # Create robot interface
-            self._robot = DobotApiDashboard(self.config.robot_ip, self.config.dashboardPort)
-            self._feedFour = DobotApiFeedBack(self.config.robot_ip, self.config.feedPortFour)
-
-            # Enable the robot
-            self.logger.info("Enabling robot...")
-            if self.config.control_mode == ControlMode.CARTESIAN_MOTION:
-                if self.parseResultId(self._robot.EnableRobot())[0] != 0:
-                    self.logger.error("Failed to enable BiDobot Nova5 TCP mode robot. Check if port 29999 is occupied.")
-                    return
-                self.logger.info("BiDobot Nova5 TCP mode robot enabled successfully.")
-            elif self.config.control_mode == ControlMode.JOINT_MOTION:
-                self._robot.EnableRobot()
-                self.logger.info("BiDobot Nova5 Joint mode robot enabled successfully.")
-            else:
-                raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
+            self._left_robot = DobotApiDashboard(self.config.left_robot_ip, self.config.left_dashboardPort)
+            self._left_feedFour = DobotApiFeedBack(self.config.left_robot_ip, self.config.left_feedPortFour)
+            self._right_robot = DobotApiDashboard(self.config.right_robot_ip, self.config.right_dashboardPort)
+            self._right_feedFour = DobotApiFeedBack(self.config.right_robot_ip, self.config.right_feedPortFour)
 
             # Start feedback thread to continuously read robot state (for get_observation)
             # TODO: Needs testing
@@ -348,34 +609,76 @@ class BiDobotNova5(Robot):
                 target=self.get_robot_state)  # robot state feedback thread
             feed_thread.daemon = True
             feed_thread.start()
+            self._wait_for_first_feedback()
 
-            # Clear any existing fault
-            # TODO: RobotMode 支持的端口是29999还是30004？需要确认一下
-            if self.feedData.RobotMode == 9: # ROBOT_MODE_ERROR
-                self.logger.warn("Fault occurred on the connected BiDobot Nova5 robot, trying to clear ...")
-                # Try to clear the fault
-                if not self._robot.ClearError():
-                    raise RuntimeError("Failed to clear BiDobot Nova5 robot fault. Check the robot status.")
-                self.logger.info("Fault on the connected BiDobot Nova5 robot is cleared")
-            elif self.feedData.RobotMode == 5: # ROBOT_MODE_ENABLE
-                self.logger.info("BiDobot Nova5 robot is enabled and ready.")
-            else:   
-                self.logger.warn(f"BiDobot Nova5 robot is in unexpected mode {self.feedData.RobotMode} after enabling. Check robot status.")
+            # Clear fault before enabling if needed.
+            if int(self.left_feedData.RobotMode) == 9 and int(self.right_feedData.RobotMode) == 9:
+                self.logger.warn("Robot is in error mode before enabling, trying ClearError ...")
+                self._raise_if_dobot_error(self._left_robot.ClearError(), "ClearError")
+                self._raise_if_dobot_error(self._right_robot.ClearError(), "ClearError")
+                self._wait_until_not_error_mode()
+                self.logger.info("Fault on the connected robot is cleared")
+
+            # Enable the robot
+            self.logger.info("Enabling robot...")
+            if self.config.control_mode in (ControlMode.CARTESIAN_MOTION, ControlMode.JOINT_MOTION):
+                left_enable_response = self._left_robot.EnableRobot()
+                right_enable_response = self._right_robot.EnableRobot()
+                left_enable_error, _ = self._parse_dobot_response(left_enable_response)
+                right_enable_error, _ = self._parse_dobot_response(right_enable_response)
+                if left_enable_error != 0 or right_enable_error != 0:
+                    left_mode_response = self._left_robot.RobotMode()
+                    right_mode_response = self._right_robot.RobotMode()
+                    left_mode_error, left_mode_values = self._parse_dobot_response(left_mode_response)
+                    right_mode_error, right_mode_values = self._parse_dobot_response(right_mode_response)
+                    left_current_mode = int(float(left_mode_values[0])) if left_mode_error == 0 and left_mode_values else -1
+                    right_current_mode = int(float(right_mode_values[0])) if right_mode_error == 0 and right_mode_values else -1
+                    if left_current_mode in (5, 6, 7, 8) and right_current_mode in (5, 6, 7, 8):
+                        self.logger.warn(
+                            f"EnableRobot returned {left_enable_error}, but RobotMode={left_current_mode}. "
+                            f"EnableRobot returned {right_enable_error}, but RobotMode={right_current_mode}. "
+                            "Proceeding with existing enabled/control state."
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"EnableRobot failed with ErrorID {left_enable_error}: {left_enable_response.strip()} "
+                            f"EnableRobot failed with ErrorID {right_enable_error}: {right_enable_response.strip()} "
+                            f"(RobotMode={left_current_mode}); GetErrorID: {self._dobot_error_detail()}"
+                            f"(RobotMode={right_current_mode}); GetErrorID: {self._dobot_error_detail()}"
+                        )
+                else:
+                    if self.config.control_mode == ControlMode.CARTESIAN_MOTION:
+                        self.logger.info("Robot TCP enabled successfully.")
+                    else:
+                        self.logger.info("Robot Joint enabled successfully.")
+            else:
+                raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
+
+            if self.left_feedData.RobotMode == 5 and self.right_feedData.RobotMode == 5:
+                self.logger.info("Robot is enabled and ready.")
+            else:
+                self.logger.warn(
+                    f"Robot is in unexpected mode {self.left_feedData.RobotMode} after enabling. Check robot status."
+                    f"Robot is in unexpected mode {self.right_feedData.RobotMode} after enabling. Check robot status."
+                )
 
             # Wait for robot to become operational
             timeout = 30  # seconds
             start_time = time.time()
-            while not self.feedData.RobotMode == 5:  # ROBOT_MODE_ENABLE  Enabled and idle
+            while not self.left_feedData.RobotMode == 5 and self.right_feedData.RobotMode == 5:  # ROBOT_MODE_ENABLE  Enabled and idle
                 if time.time() - start_time > timeout:
-                    raise RuntimeError(f"BiDobot Nova5 robot did not become operational within {timeout} seconds")
+                    raise RuntimeError(f"Robot did not become operational within {timeout} seconds")
                 time.sleep(0.1)
 
-            self.logger.info("BiDobot Nova5 robot is now operational.")
+            self.logger.info("Robot is now operational.")
 
             # Connect Xense Gripper end-effector (provides gripper + wrist_cam + tactile)
-            if self._xense_gripper and self.config.use_gripper:
-                self.logger.info("Connecting BiDobot Nova5 Xense Gripper...")
-                self._xense_gripper.connect()
+            if self._xense_left_gripper and self.config.use_left_gripper:
+                self.logger.info("Connecting Xense Gripper...")
+                self._xense_left_gripper.connect()
+            if self._xense_right_gripper and self.config.use_right_gripper:
+                self.logger.info("Connecting Xense Gripper...")
+                self._xense_right_gripper.connect()
 
             # Connect external cameras (e.g., scene cameras)
             for cam in self.cameras.values():
@@ -393,14 +696,16 @@ class BiDobotNova5(Robot):
             self.configure()
 
             mode_desc = self.config.control_mode.value
-            if self._xense_gripper and self.config.use_gripper:
-                gripper_status = "with Xense Gripper (gripper + wrist_cam + tactile)"
+            if self._xense_left_gripper and self.config.use_left_gripper:
+                gripper_status = "with Xense Left Gripper (gripper + wrist_cam + tactile)"
+            if self._xense_right_gripper and self.config.use_right_gripper:
+                gripper_status = "with Xense Right Gripper (gripper + wrist_cam + tactile)"
             else:
                 gripper_status = "no gripper"
-            self.logger.info(f"✅ BiDobot Nova5 connected and ready in {mode_desc} mode ({gripper_status}).")
+            self.logger.info(f"✅ Dobot Nova5 connected and ready in {mode_desc} mode ({gripper_status}).")
 
         except Exception as e:
-            self.logger.error(f"Failed to connect to BiDobot Nova5 robot: {e}")
+            self.logger.error(f"Failed to connect to Dobot Nova5 robot: {e}")
             self._robot = None
             self._is_connected = False
             raise
@@ -417,45 +722,16 @@ class BiDobotNova5(Robot):
 
         self.logger.info("Moving to home position...")
 
-        home_point_list = self.config.home_point_list
-        # 走点指令
-        recvmovemess = self._robot.MovJ(*home_point_list, 0)
-        print("MovJ:", recvmovemess)
-        print(self.parseResultId(recvmovemess))
-        currentCommandID = self.parseResultId(recvmovemess)[1]
-        print("指令 ID:", currentCommandID)
-        #sleep(0.02)
-        while True:  #完成判断循环
-
-            print(self.feedData.RobotMode)
-            if self.feedData.RobotMode == 5 and self.feedData.robotCurrentCommandID == currentCommandID:
-                print("运动结束")
-                break
-            time.sleep(0.1)
-        
-        # Initialize gripper position (only if gripper is enabled)
-        if self._xense_gripper is not None:
-            if self.config.xense_gripper_init_open:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_max_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force,
-                )  # fully open
-            else:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_min_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force
-                )  # fully closed
-        
-        # Wait for target reached
-        while not self._robot.primitive_states()["reachedTarget"]:
-            time.sleep(0.1)
-        self._home_tcp_pose = np.array(self._robot.states().tcp_pose)
-        self.logger.info(f"Home TCP pose: {self._home_tcp_pose}")
+        self._move_joint_movj(self._left_robot, self.config.left_home_point_list, "left home position")
+        self._move_joint_movj(self._right_robot, self.config.right_home_point_list, "right home position")
+        self._initialize_gripper_position()
+        self._left_home_tcp_pose, self._right_home_tcp_pose = self._current_tcp_pose_quat_from_feedback()
+        self.logger.info(f"Left home TCP pose: {self._left_home_tcp_pose}")
+        self.logger.info(f"Right home TCP pose: {self._right_home_tcp_pose}")
         self.logger.info("✅ Robot at home position.")
-        if self._xense_gripper is not None:
-            self.logger.info(f"Gripper position: {self._xense_gripper.get_gripper_position()}")
+        if self._xense_left_gripper is not None and self._xense_right_gripper is not None:
+            self.logger.info(f"Left gripper position: {self._xense_left_gripper.get_gripper_position()}")
+            self.logger.info(f"Right gripper position: {self._xense_right_gripper.get_gripper_position()}")
 
     def _go_to_start(self) -> None:
         """Move robot to start position using MoveJ primitive.
@@ -464,51 +740,18 @@ class BiDobotNova5(Robot):
         - jntVelScale: Joint velocity scale 1-100 (from config.start_vel_scale)
         - target: Start joint position in degrees (from config.start_position_degree)
         """
-        if not self._is_connected or self._robot is None:
+        if not self._is_connected or self._left_robot is None or self._right_robot is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         self.logger.info("Moving to start position...")
 
-        # Create target joint position from config (in degrees)
-        start_jpos = self.config.start_position_degree
-
-        # 走点指令
-        recvmovemess = self._robot.MovJ(*start_jpos, 0)
-        print("MovJ:", recvmovemess)
-        print(self.parseResultId(recvmovemess))
-        currentCommandID = self.parseResultId(recvmovemess)[1]
-        print("指令 ID:", currentCommandID)
-        #sleep(0.02)
-        while True:  #完成判断循环
-
-            print(self.feedData.RobotMode)
-            if self.feedData.RobotMode == 5 and self.feedData.robotCurrentCommandID == currentCommandID:
-                print("运动结束")
-                break
-            time.sleep(0.1)
-        
-        # Initialize gripper position (only if gripper is enabled)
-        if self._xense_gripper is not None:
-            if self.config.xense_gripper_init_open:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_max_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force,
-                )  # fully open
-            else:
-                self._xense_gripper._gripper.set_position_sync(
-                    self.config.gripper_min_pos,
-                    vmax=self.config.gripper_velocity,
-                    fmax=self.config.gripper_force
-                )  # fully closed
-        
-        # Wait for target reached
-        while not self._robot.primitive_states()["reachedTarget"]:
-            time.sleep(0.1)
-
+        self._move_joint_movj(self._left_robot, self.config.left_start_position_degree, "left start position")
+        self._move_joint_movj(self._right_robot, self.config.right_start_position_degree, "right start position")
+        self._initialize_gripper_position()
         self.logger.info("✅ Robot at start position.")
-        if self._xense_gripper is not None:
-            self.logger.info(f"Gripper position: {self._xense_gripper.get_gripper_position()}")
+        if self._xense_left_gripper is not None and self._xense_right_gripper is not None:
+            self.logger.info(f"Left gripper position: {self._xense_left_gripper.get_gripper_position()}")
+            self.logger.info(f"Right gripper position: {self._xense_right_gripper.get_gripper_position()}")
 
     def reset_to_initial_position(self) -> None:
         """Reset robot to initial position based on config.go_to_start.
@@ -529,23 +772,32 @@ class BiDobotNova5(Robot):
     def get_robot_state(self) -> Optional[dict]:
         # 获取机器人状态
         while True:
-            feedInfo = self._feedFour.feedBackData()
+            if self._left_feedFour is None or self._right_feedFour is None:
+                return None
+            try:
+                left_feedInfo = self._left_feedFour.feedBackData()
+                right_feedInfo = self._right_feedFour.feedBackData()
+            except Exception:
+                # Socket may be closing during disconnect; exit feedback thread quietly.
+                return None
             with self.__globalLockValue:
-                if feedInfo is not None:   
-                    if hex((feedInfo['TestValue'][0])) == '0x123456789abcdef':
+                if left_feedInfo is not None and right_feedInfo is not None:   
+                    if hex((left_feedInfo['TestValue'][0])) == '0x123456789abcdef' and hex((right_feedInfo['TestValue'][0])) == '0x123456789abcdef':
                         # 基础字段
-                        self.feedData.MessageSize = feedInfo['len'][0]
-                        self.feedData.RobotMode = feedInfo['RobotMode'][0]
-                        self.feedData.DigitalInputs = feedInfo['DigitalInputs'][0]
-                        self.feedData.DigitalOutputs = feedInfo['DigitalOutputs'][0]
-                        self.feedData.robotCurrentCommandID = feedInfo['CurrentCommandId'][0]
-                        # 自定义添加所需反馈数据
-                        '''
-                        self.feedData.DigitalOutputs = int(feedInfo['DigitalOutputs'][0])
-                        self.feedData.RobotMode = int(feedInfo['RobotMode'][0])
-                        self.feedData.TimeStamp = int(feedInfo['TimeStamp'][0])
-                        '''
-
+                        self.left_feedData.MessageSize = left_feedInfo['len'][0]
+                        self.left_feedData.RobotMode = left_feedInfo['RobotMode'][0]
+                        self.left_feedData.DigitalInputs = left_feedInfo['DigitalInputs'][0]
+                        self.left_feedData.DigitalOutputs = left_feedInfo['DigitalOutputs'][0]
+                        self.left_feedData.robotCurrentCommandID = left_feedInfo['CurrentCommandId'][0]
+                        self.left_feedData.tcpPose = left_feedInfo['ToolVectorActual'][0]
+                        self.left_feedData.qActual = left_feedInfo['QActual'][0]
+                        self.right_feedData.MessageSize = right_feedInfo['len'][0]
+                        self.right_feedData.RobotMode = right_feedInfo['RobotMode'][0]
+                        self.right_feedData.DigitalInputs = right_feedInfo['DigitalInputs'][0]
+                        self.right_feedData.DigitalOutputs = right_feedInfo['DigitalOutputs'][0]
+                        self.right_feedData.robotCurrentCommandID = right_feedInfo['CurrentCommandId'][0]
+                        self.right_feedData.tcpPose = right_feedInfo['ToolVectorActual'][0]
+                        self.right_feedData.qActual = right_feedInfo['QActual'][0]
 
     def get_observation(self) -> dict[str, Any]:
         """Get current robot observation based on control_mode.
@@ -556,50 +808,65 @@ class BiDobotNova5(Robot):
 
         Also includes camera images if configured.
         """
-        if not self.is_connected or self._robot is None:
+        if not self.is_connected or self._left_robot is None or self._right_robot is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         obs_dict = {}
 
         if self.config.control_mode == ControlMode.JOINT_MOTION:
             # Joint positions (7D)
-            for i, key in enumerate(self._joint_pos_keys):
-                # TODO
-                # obs_dict[key] = self.feedData.[i]
+            for i, key in enumerate(self._left_joint_pos_keys):
+                obs_dict[key] = self.left_feedData.qActual[i]
+            for i, key in enumerate(self._right_joint_pos_keys):
+                obs_dict[key] = self.right_feedData.qActual[i]
 
         elif self.config.control_mode == ControlMode.CARTESIAN_MOTION:
             # TCP pose from SDK: [x, y, z, qw, qx, qy, qz]
             # TODO
-            tcp_pose = self.feedData.
+            left_tcp_pose = self.left_feedData.tcpPose
+            right_tcp_pose = self.right_feedData.tcpPose
 
             # Position (3D)
-            obs_dict["tcp.x"] = tcp_pose[0]
-            obs_dict["tcp.y"] = tcp_pose[1]
-            obs_dict["tcp.z"] = tcp_pose[2]
+            obs_dict["left_tcp.x"] = left_tcp_pose[0] / MM_PER_METER
+            obs_dict["left_tcp.y"] = left_tcp_pose[1] / MM_PER_METER
+            obs_dict["left_tcp.z"] = left_tcp_pose[2] / MM_PER_METER
+            obs_dict["right_tcp.x"] = right_tcp_pose[0] / MM_PER_METER
+            obs_dict["right_tcp.y"] = right_tcp_pose[1] / MM_PER_METER
+            obs_dict["right_tcp.z"] = right_tcp_pose[2] / MM_PER_METER
 
             # Convert quaternion to 6D rotation representation
-            r6d = quaternion_to_rotation_6d(tcp_pose[3], tcp_pose[4], tcp_pose[5], tcp_pose[6])
+            left_quat = euler_to_quaternion(np.deg2rad(left_tcp_pose[3]), np.deg2rad(left_tcp_pose[4]), np.deg2rad(left_tcp_pose[5]))
+            right_quat = euler_to_quaternion(np.deg2rad(right_tcp_pose[3]), np.deg2rad(right_tcp_pose[4]), np.deg2rad(right_tcp_pose[5]))
+            left_r6d = quaternion_to_rotation_6d(left_quat[0], left_quat[1], left_quat[2], left_quat[3])
+            right_r6d = quaternion_to_rotation_6d(right_quat[0], right_quat[1], right_quat[2], right_quat[3])
 
-            obs_dict["tcp.r1"] = r6d[0]
-            obs_dict["tcp.r2"] = r6d[1]
-            obs_dict["tcp.r3"] = r6d[2]
-            obs_dict["tcp.r4"] = r6d[3]
-            obs_dict["tcp.r5"] = r6d[4]
-            obs_dict["tcp.r6"] = r6d[5]
+            obs_dict["left_tcp.r1"] = left_r6d[0]
+            obs_dict["left_tcp.r2"] = left_r6d[1]
+            obs_dict["left_tcp.r3"] = left_r6d[2]
+            obs_dict["left_tcp.r4"] = left_r6d[3]
+            obs_dict["left_tcp.r5"] = left_r6d[4]
+            obs_dict["left_tcp.r6"] = left_r6d[5]
+            obs_dict["right_tcp.r1"] = right_r6d[0]
+            obs_dict["right_tcp.r2"] = right_r6d[1]
+            obs_dict["right_tcp.r3"] = right_r6d[2]
+            obs_dict["right_tcp.r4"] = right_r6d[3]
+            obs_dict["right_tcp.r5"] = right_r6d[4]
+            obs_dict["right_tcp.r6"] = right_r6d[5]
 
 
         else:
             raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
 
         # Get data from Xense Gripper (gripper + tactile sensors)
-        if self._xense_gripper is not None and self.config.use_gripper:
+        if self._xense_left_gripper is not None and self.config.use_left_gripper:
             # Read sensors (keys are mapped from SN to sensor_keys names)
-            sensor_data = self._xense_gripper.get_sensor_data()
+            sensor_data = self._xense_left_gripper.get_sensor_data()
             for key, data in sensor_data.items():
                 obs_dict[key] = data
 
             # Read gripper position
-            obs_dict[self._gripper_key] = self._xense_gripper.get_gripper_position()
+            obs_dict[self._left_gripper_key] = self._xense_left_gripper.get_gripper_position()
+            obs_dict[self._right_gripper_key] = self._xense_right_gripper.get_gripper_position()
 
         # External camera observations (scene cameras, etc.)
         for cam_key, cam in self.cameras.items():
@@ -622,21 +889,40 @@ class BiDobotNova5(Robot):
         if self._robot is None:
             raise RuntimeError("Robot object not created. Call connect() first or create Robot manually.")
         
-        # Compute forward kinematics
-        tcp_pose = self._robot.PositiveKin(joint_positions_deg)
+        # V4 API PositiveKin returns TCP pose in controller format:
+        # [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg].
+        response = self._robot.PositiveKin(
+            float(joint_positions_deg[0]),
+            float(joint_positions_deg[1]),
+            float(joint_positions_deg[2]),
+            float(joint_positions_deg[3]),
+            float(joint_positions_deg[4]),
+            float(joint_positions_deg[5]),
+        )
+        values = self._raise_if_dobot_error(response, "PositiveKin")
+        if len(values) < 6:
+            raise RuntimeError(
+                f"PositiveKin response missing pose values: {response.strip()}"
+            )
 
-        
-        return np.array(tcp_pose, dtype=np.float32)
-
-    def get_start_tcp_pose(self) -> np.ndarray:
-        """Get TCP pose at start position (from config.start_position_degree).
-        
-        This can be called after Robot object is created, even before robot is enabled.
-        
-        Returns:
-            TCP pose [x, y, z, qw, qx, qy, qz] (7D)
-        """
-        return self.forward_kinematics(self.config.start_position_degree)
+        x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg = [float(v) for v in values[:6]]
+        quat = euler_to_quaternion(
+            np.deg2rad(rx_deg),
+            np.deg2rad(ry_deg),
+            np.deg2rad(rz_deg),
+        )
+        return np.array(
+            [
+                x_mm / MM_PER_METER,
+                y_mm / MM_PER_METER,
+                z_mm / MM_PER_METER,
+                quat[0],
+                quat[1],
+                quat[2],
+                quat[3],
+            ],
+            dtype=np.float32,
+        )
 
     def get_start_tcp_pose_euler(self) -> np.ndarray:
         """Get TCP pose at start position in Euler format [x, y, z, roll, pitch, yaw, gripper_pos].
@@ -646,21 +932,30 @@ class BiDobotNova5(Robot):
         Returns:
             numpy array of shape (7,) with [x, y, z, roll, pitch, yaw, gripper_pos]
         """
-        tcp_pose_quat = self.get_start_tcp_pose()
+        left_tcp_pose_quat = self.forward_kinematics(self.config.left_start_position_degree)
+        right_tcp_pose_quat = self.forward_kinematics(self.config.right_start_position_degree)
         
         # Convert quaternion to Euler angles
-        euler = quaternion_to_euler(
-            tcp_pose_quat[3], tcp_pose_quat[4], tcp_pose_quat[5], tcp_pose_quat[6]
+        left_euler = quaternion_to_euler(
+            left_tcp_pose_quat[3], left_tcp_pose_quat[4], left_tcp_pose_quat[5], left_tcp_pose_quat[6]
+        )
+        right_euler = quaternion_to_euler(
+            right_tcp_pose_quat[3], right_tcp_pose_quat[4], right_tcp_pose_quat[5], right_tcp_pose_quat[6]
         )
         
         # Get initial gripper position based on config
-        gripper_pos = self.config.gripper_max_pos if self.config.xense_gripper_init_open else 0.0
+        left_gripper_pos = self.config.left_gripper_max_pos if self.config.left_gripper_init_open else 0.0
+        right_gripper_pos = self.config.right_gripper_max_pos if self.config.right_gripper_init_open else 0.0
         
-        return np.array(
-            [tcp_pose_quat[0], tcp_pose_quat[1], tcp_pose_quat[2], 
-             euler[0], euler[1], euler[2], gripper_pos],
+        left_tcp_pose = np.array(
+            [left_tcp_pose_quat[0], left_tcp_pose_quat[1], left_tcp_pose_quat[2], left_euler[0], left_euler[1], left_euler[2], left_gripper_pos],
             dtype=np.float32,
         )
+        right_tcp_pose = np.array(
+            [right_tcp_pose_quat[0], right_tcp_pose_quat[1], right_tcp_pose_quat[2], right_euler[0], right_euler[1], right_euler[2], right_gripper_pos],
+            dtype=np.float32,
+        )
+        return left_tcp_pose, right_tcp_pose
 
     def get_current_tcp_pose_euler(self) -> np.ndarray:
         """Get current TCP pose in Euler angles format [x, y, z, roll, pitch, yaw, gripper_pos].
@@ -677,23 +972,28 @@ class BiDobotNova5(Robot):
         if self.config.control_mode != ControlMode.CARTESIAN_MOTION:
             raise ValueError("get_current_tcp_pose_euler requires CARTESIAN_MOTION mode")
 
-        # TODO
-        # Get current TCP pose (quaternion format)
-        states = self._robot.states()
-        tcp_pose = states.tcp_pose  # [x, y, z, qw, qx, qy, qz]
+        left_tcp_pose = np.asarray(self.left_feedData.tcpPose, dtype=np.float32)
+        right_tcp_pose = np.asarray(self.right_feedData.tcpPose, dtype=np.float32)
+        left_gripper_pos = self._current_gripper_position()
+        right_gripper_pos = self._current_gripper_position()
 
-        # Convert quaternion to Euler angles
-        euler = quaternion_to_euler(tcp_pose[3], tcp_pose[4], tcp_pose[5], tcp_pose[6])
-        roll, pitch, yaw = euler[0], euler[1], euler[2]
-
-        # Get gripper position directly from XenseFlare gripper
-        gripper_pos = 0.0
-        if self._xense_gripper and self.config.use_gripper:
-            gripper_pos = self._xense_gripper.get_gripper_position()
-
-        # Return [x, y, z, roll, pitch, yaw, gripper_pos]
         return np.array(
-            [tcp_pose[0], tcp_pose[1], tcp_pose[2], roll, pitch, yaw, gripper_pos],
+            [
+                left_tcp_pose[0] / MM_PER_METER,
+                left_tcp_pose[1] / MM_PER_METER,
+                left_tcp_pose[2] / MM_PER_METER,
+                np.deg2rad(left_tcp_pose[3]),
+                np.deg2rad(left_tcp_pose[4]),
+                np.deg2rad(left_tcp_pose[5]),
+                left_gripper_pos,
+                right_tcp_pose[0] / MM_PER_METER,
+                right_tcp_pose[1] / MM_PER_METER,
+                right_tcp_pose[2] / MM_PER_METER,
+                np.deg2rad(right_tcp_pose[3]),
+                np.deg2rad(right_tcp_pose[4]),
+                np.deg2rad(right_tcp_pose[5]),
+                right_gripper_pos,
+            ],
             dtype=np.float32,
         )
 
@@ -712,21 +1012,18 @@ class BiDobotNova5(Robot):
         if self.config.control_mode != ControlMode.CARTESIAN_MOTION:
             raise ValueError("get_current_tcp_pose_quat requires CARTESIAN_MOTION mode")
 
-        # TODO
-        # Get current TCP pose (quaternion format)
-        states = self._robot.states()
-        tcp_pose = states.tcp_pose  # [x, y, z, qw, qx, qy, qz]
-
-        # Get gripper position directly from XenseFlare gripper
-        gripper_pos = 0.0
-        if self._xense_gripper and self.config.use_gripper:
-            gripper_pos = self._xense_gripper.get_gripper_position()
-
-        # Return [x, y, z, qw, qx, qy, qz, gripper_pos]
-        return np.array(
-            [*tcp_pose, gripper_pos],
+        left_tcp_pose, right_tcp_pose = self._current_tcp_pose_quat_from_feedback()
+        left_gripper_pos = self._current_gripper_position()
+        right_gripper_pos = self._current_gripper_position()
+        left_pose = np.array(
+            [left_tcp_pose[0], left_tcp_pose[1], left_tcp_pose[2], left_tcp_pose[3], left_tcp_pose[4], left_tcp_pose[5], left_tcp_pose[6], left_gripper_pos],
             dtype=np.float32,
         )
+        right_pose = np.array(
+            [right_tcp_pose[0], right_tcp_pose[1], right_tcp_pose[2], right_tcp_pose[3], right_tcp_pose[4], right_tcp_pose[5], right_tcp_pose[6], right_gripper_pos],
+            dtype=np.float32,
+        )
+        return left_pose, right_pose
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """Send action command to the robot.
@@ -742,12 +1039,12 @@ class BiDobotNova5(Robot):
         Returns:
             The action that was actually sent (may be clipped for safety)
         """
-        if not self.is_connected or self._robot is None:
+        if not self.is_connected or self._left_robot is None or self._right_robot is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Check for fault
-        if self._robot.fault():
-            raise RuntimeError("Robot fault detected. Call robot.clear_fault() or reconnect.")
+        if self.left_feedData.RobotMode == 9 or self.right_feedData.RobotMode == 9:
+            raise RuntimeError(f"Left robot fault detected. GetErrorID: {self._left_dobot_error_detail()}")
 
         # Send robot arm action
         if self.config.control_mode == ControlMode.JOINT_MOTION:
@@ -778,17 +1075,18 @@ class BiDobotNova5(Robot):
         target_pos = [action[key] for key in self._action_joint_keys]
 
         # Send command using API
-        self._robot.ServoJ(
+        response = self._robot.ServoJ(
             target_pos[0],
             target_pos[1],
             target_pos[2],
             target_pos[3],
             target_pos[4],
             target_pos[5],
-            self._control_frequency,
+            1.0 / self._control_frequency,
             self._aheadtime,
             self._gain,
         )
+        self._raise_if_dobot_error(response, "ServoJ")
 
         return action
 
@@ -797,11 +1095,15 @@ class BiDobotNova5(Robot):
 
         Action keys: action.tcp.{x,y,z,r1,r2,r3,r4,r5,r6}
 
-        The action uses 6D rotation representation which is converted to quaternion
-        for the Flexiv SDK (SendCartesianMotionForce expects [x,y,z,qw,qx,qy,qz]).
+        The action uses 6D rotation representation, then converts it to Dobot's
+        ServoP Cartesian pose format [x, y, z, rx, ry, rz].
         """
         # Extract position
-        x, y, z = action["tcp.x"], action["tcp.y"], action["tcp.z"]
+        x_m, y_m, z_m = action["tcp.x"], action["tcp.y"], action["tcp.z"]
+        # LeRobot actions use meters; Dobot ServoP expects millimeters.
+        x_mm = float(x_m) * MM_PER_METER
+        y_mm = float(y_m) * MM_PER_METER
+        z_mm = float(z_m) * MM_PER_METER
 
         # Extract 6D rotation and convert to quaternion
         r6d = np.array(
@@ -819,15 +1121,23 @@ class BiDobotNova5(Robot):
         euler = quaternion_to_euler(
             quat[0], quat[1], quat[2], quat[3]
         )
-
-        # Send command using NRT API (pure motion - no wrench parameter needed)
-        self._robot.ServoP(
-            x, y, z, 
-            euler[0], euler[1], euler[2], 
-            self._control_frequency, 
-            self._aheadtime, 
-            self._gain
+        self.logger.debug(
+            f"ServoP xyz: [{x_m:.6f}, {y_m:.6f}, {z_m:.6f}] m -> "
+            f"[{x_mm:.3f}, {y_mm:.3f}, {z_mm:.3f}] mm"
         )
+
+        response = self._robot.ServoP(
+            x_mm,
+            y_mm,
+            z_mm,
+            float(np.rad2deg(euler[0])),
+            float(np.rad2deg(euler[1])),
+            float(np.rad2deg(euler[2])),
+            # 1.0 / self._control_frequency,
+            # self._aheadtime,
+            # self._gain,
+        )
+        self._raise_if_dobot_error(response, "ServoP")
 
         return action
 
@@ -836,14 +1146,20 @@ class BiDobotNova5(Robot):
 
         Action key: gripper.pos (normalized 0-1)
         """
-        if not self._xense_gripper or not self.config.use_gripper:
+        if not self._xense_left_gripper or not self.config.use_left_gripper or not self._xense_right_gripper or not self.config.use_right_gripper:
+            self.logger.warn("No Xense Gripper connected, skipping gripper action.")
             return
 
-        if self._gripper_key not in action:
+        if self._left_gripper_key not in action:
+            self.logger.warn("Left gripper key not in action, skipping gripper action.")
+            return
+        if self._right_gripper_key not in action:
+            self.logger.warn("Right gripper key not in action, skipping gripper action.")
             return
 
         # Set gripper position
-        self._xense_gripper.set_gripper_position(action[self._gripper_key])  # normalized [0, 1]
+        self._xense_left_gripper.set_gripper_position(action[self._left_gripper_key])
+        self._xense_right_gripper.set_gripper_position(action[self._right_gripper_key])
 
     def clear_fault(self) -> bool:
         """Attempt to clear robot fault.
@@ -854,19 +1170,16 @@ class BiDobotNova5(Robot):
         if self._robot is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # TODO
-        if not self._robot.fault():
+        if self.left_feedData.RobotMode != 9 or self.right_feedData.RobotMode != 9:
             self.logger.info("No fault to clear.")
             return True
 
-        # TODO
         self.logger.info("Attempting to clear fault...")
-        result = self._robot.ClearFault()
-        if result:
-            self.logger.info("✅ Fault cleared successfully.")
-        else:
-            self.logger.error("Failed to clear fault.")
-        return result
+        response = self._left_robot.ClearError()
+        response = self._right_robot.ClearError()
+        self._raise_if_dobot_error(response, "ClearError")
+        self.logger.info("✅ Fault cleared successfully.")
+        return True
 
     def disconnect(self) -> None:
         """Disconnect from the robot safely.
@@ -880,12 +1193,12 @@ class BiDobotNova5(Robot):
 
         All errors are caught and logged, but the disconnect process continues to ensure cleanup.
         """
-        if not self._is_connected:
+        if not self._left_is_connected or not self._right_is_connected:
             self.logger.warn(f"{self} is not connected, skipping disconnect.")
             return
 
         try:
-            self.logger.info("Disconnecting from Flexiv robot...")
+            self.logger.info("Disconnecting from Dobot Nova5 robot...")
 
             # Move to home position before disconnecting
             try:
@@ -894,12 +1207,22 @@ class BiDobotNova5(Robot):
                 self.logger.warn(f"Failed to move to home before disconnect: {e}")
 
             # Stop any ongoing motion
-            if self._robot is not None:
-                self._robot.Stop()
+            if self._left_robot is not None:
+                self._left_robot.Stop()
+                self._left_robot.close()
+            if self._right_robot is not None:
+                self._right_robot.Stop()
+                self._right_robot.close()
+            if self._left_feedFour is not None:
+                self._left_feedFour.close()
+            if self._right_feedFour is not None:
+                self._right_feedFour.close()
 
             # Disconnect XenseFlare (provides gripper + camera + sensors)
-            if self._xense_gripper and self.config.use_gripper:
-                self._xense_gripper.disconnect()
+            if self._xense_left_gripper and self.config.use_left_gripper:
+                self._xense_left_gripper.disconnect()
+            if self._xense_right_gripper and self.config.use_right_gripper:
+                self._xense_right_gripper.disconnect()
 
             # Disconnect external cameras
             for cam in self.cameras.values():
@@ -908,8 +1231,14 @@ class BiDobotNova5(Robot):
         except Exception as e:
             self.logger.error(f"Error during disconnect: {e}")
         finally:
-            self._robot = None
-            self._xense_gripper = None
-            self._is_connected = False
-            self._current_mode = None
-            self.logger.info("✅ Flexiv Rizon4 disconnected.")
+            self._left_robot = None
+            self._right_robot = None
+            self._left_feedFour = None
+            self._right_feedFour = None
+            self._xense_left_gripper = None
+            self._xense_right_gripper = None
+            self._left_is_connected = False
+            self._right_is_connected = False
+            self._left_current_mode = None
+            self._right_current_mode = None
+            self.logger.info("✅ Dobot Nova5 disconnected.")

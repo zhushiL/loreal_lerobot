@@ -17,5 +17,5 @@
 
 from .config_bi_dobot_nova5 import ControlMode  # noqa: F401
 from .config_bi_dobot_nova5 import BiDobotNova5Config  # noqa: F401
-from .bi_dobot_nova5 import DobotNova5  # noqa: F401
+from .bi_dobot_nova5 import BiDobotNova5
 

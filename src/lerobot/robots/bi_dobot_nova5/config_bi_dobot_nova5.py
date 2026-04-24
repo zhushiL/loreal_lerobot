@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration for Dobot Nova5 robot."""
+"""Configuration for BiDobot Nova5 robot."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -53,7 +53,12 @@ class BiDobotNova5Config(RobotConfig):
     The BiDobot Nova5 is a 6-DOF collaborative robot with force sensing capabilities.
 
     Attributes:
-        robot_ip: str = "192.168.1.1"  # Robot IP address
+        left_robot_ip: str = "192.168.5.101"  # Robot IP address
+        left_dashboardPort: int = 29999
+        left_feedPortFour: int = 30004
+        right_robot_ip: str = "192.168.5.102"  # Robot IP address
+        right_dashboardPort: int = 29999
+        right_feedPortFour: int = 30004
         control_mode: ControlMode = ControlMode.CARTESIAN_MOTION
         control_frequency: float = 100.0  # Hz
         cameras: dict[str, CameraConfig] = field(default_factory=dict)
@@ -68,9 +73,12 @@ class BiDobotNova5Config(RobotConfig):
     """
 
     # Robot identification
-    robot_ip: str = "192.168.1.1"  # Robot IP address
-    dashboardPort: int = 29999
-    feedPortFour: int = 30004
+    left_robot_ip: str = "192.168.5.101"  # Robot IP address
+    left_dashboardPort: int = 29999
+    left_feedPortFour: int = 30004
+    right_robot_ip: str = "192.168.5.102"  # Robot IP address
+    right_dashboardPort: int = 29999
+    right_feedPortFour: int = 30004
 
     # Control settings
     # control_mode: JOINT_MOTION or CARTESIAN_MOTION
@@ -87,12 +95,12 @@ class BiDobotNova5Config(RobotConfig):
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
 
-    home_point_list = [0.0, -40.0, 0.0, 90.0, 0.0, 40.0, 0.0]
+    left_home_point_list = [-90, 0, -90, 0, 90, 0]
+    right_home_point_list = [270, 0, 90, 0, -90, 0]
     # Start position parameters (for MoveJ primitive)
     # Joint positions in degrees (factory-defined home position)
-    start_position_degree: list[float] = field(
-        default_factory=lambda: [0.0, -40.0, 0.0, 90.0, 0.0, 40.0, 0.0]
-    )
+    left_start_position_degree: list[float] = field(default_factory=lambda: [-90, 0, -90, 0, 90, 0])
+    right_start_position_degree: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
 
@@ -100,15 +108,25 @@ class BiDobotNova5Config(RobotConfig):
     # ======================== Xense Gripper (end-effector) settings ==========
     # Whether to use the Xense Gripper end-effector
     # If False, xense_gripper will be None and no gripper functionality is available
-    use_gripper: bool = True
+    use_left_gripper: bool = False
+    use_right_gripper: bool = False
 
     # Gripper identification (MAC address / serial number)
-    xense_gripper_mac_addr: str = "e2b26adbb104"
+    xense_left_gripper_mac_addr: str = "e2b26adbb104"
+    xense_right_gripper_mac_addr: str = "e2b26adbb104"
 
     # Tactile sensor settings
-    xense_gripper_rectify_size: tuple[int, int] = (400, 700)
-    xense_gripper_sensor_output_type: SensorOutputType = SensorOutputType.RECTIFY
-    xense_gripper_sensor_keys: dict[str, str] = field(
+    xense_left_gripper_rectify_size: tuple[int, int] = (400, 700)
+    xense_right_gripper_rectify_size: tuple[int, int] = (400, 700)
+    xense_left_gripper_sensor_output_type: SensorOutputType = SensorOutputType.RECTIFY
+    xense_right_gripper_sensor_output_type: SensorOutputType = SensorOutputType.RECTIFY
+    xense_left_gripper_sensor_keys: dict[str, str] = field(
+        default_factory=lambda: {
+            "OG000657": "right_tactile",
+            "OG000450": "left_tactile",
+        }
+    )
+    xense_right_gripper_sensor_keys: dict[str, str] = field(
         default_factory=lambda: {
             "OG000657": "right_tactile",
             "OG000450": "left_tactile",
@@ -116,18 +134,24 @@ class BiDobotNova5Config(RobotConfig):
     )
 
     # Gripper normalization: raw_pos / gripper_max_pos -> [0, 1]
-    gripper_min_pos: float = 0.0
-    gripper_max_pos: float = 85.0
+    left_gripper_min_pos: float = 0.0
+    right_gripper_min_pos: float = 0.0
+    left_gripper_max_pos: float = 85.0
+    right_gripper_max_pos: float = 85.0
 
     # Gripper control parameters for set_position()
-    gripper_velocity: float = 80.0  # Maximum velocity mm/s
-    gripper_force: float = 20.0  # Maximum force N
+    left_gripper_velocity: float = 80.0  # Maximum velocity mm/s
+    right_gripper_velocity: float = 80.0  # Maximum velocity mm/s
+    left_gripper_force: float = 20.0  # Maximum force N
+    right_gripper_force: float = 20.0  # Maximum force N
 
     # Initialize gripper to fully open on connect
-    xense_gripper_init_open: bool = True
+    left_gripper_init_open: bool = True
+    right_gripper_init_open: bool = True
 
     # Auto-created in __post_init__ from xense_gripper_* parameters (do not set directly)
-    xense_gripper: GripperConfig | None = field(default=None, init=False)
+    xense_left_gripper: GripperConfig | None = field(default=None, init=False)
+    xense_right_gripper: GripperConfig | None = field(default=None, init=False)
 
 
     # ======================== Camera Configuration ========================
@@ -169,40 +193,45 @@ class BiDobotNova5Config(RobotConfig):
                 f"control_frequency must be between 1 and 100 Hz for NRT mode, got {self.control_frequency}"
             )
 
-        # Validate joint parameters have correct length (7-DOF robot)
-        if len(self.joint_max_vel) != 7:
-            raise ValueError(f"joint_max_vel must have 7 elements, got {len(self.joint_max_vel)}")
-        if len(self.joint_max_acc) != 7:
-            raise ValueError(f"joint_max_acc must have 7 elements, got {len(self.joint_max_acc)}")
-
-        # Validate Cartesian/force parameters have correct length (6-DOF)
-        if len(self.force_control_axis) != 6:
-            raise ValueError(f"force_control_axis must have 6 elements, got {len(self.force_control_axis)}")
-        if len(self.max_contact_wrench) != 6:
-            raise ValueError(f"max_contact_wrench must have 6 elements, got {len(self.max_contact_wrench)}")
-        if len(self.target_wrench) != 6:
-            raise ValueError(f"target_wrench must have 6 elements, got {len(self.target_wrench)}")
-
         # Validate start position parameters
-        if len(self.start_position_degree) != 7:
-            raise ValueError(
-                f"start_position_degree must have 7 elements, got {len(self.start_position_degree)}"
-            )
+        if len(self.left_start_position_degree) != 6:
+            raise ValueError(f"left_start_position_degree must have 6 elements, got {len(self.left_start_position_degree)}")
+        if len(self.right_start_position_degree) != 6:
+            raise ValueError(f"right_start_position_degree must have 6 elements, got {len(self.right_start_position_degree)}")
+        if len(self.left_home_point_list) != 6:
+            raise ValueError(f"left_home_point_list must have 6 elements, got {len(self.left_home_point_list)}")
+        if len(self.right_home_point_list) != 6:
+            raise ValueError(f"right_home_point_list must have 6 elements, got {len(self.right_home_point_list)}")
         if not 1 <= self.start_vel_scale <= 100:
             raise ValueError(f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}")
 
         # Create XenseGripperConfig from exposed parameters (only if use_gripper=True)
-        if self.use_gripper:
-            self.xense_gripper = GripperConfig(
-                mac_addr=self.xense_gripper_mac_addr,
-                rectify_size=self.xense_gripper_rectify_size,
-                sensor_output_type=self.xense_gripper_sensor_output_type,
-                sensor_keys=self.xense_gripper_sensor_keys,
-                gripper_velocity=self.gripper_velocity,
-                gripper_force=self.gripper_force,
-                gripper_min_pos=self.gripper_min_pos,
-                gripper_max_pos=self.gripper_max_pos,
-                init_open=self.xense_gripper_init_open,
+        if self.use_left_gripper:
+            self.xense_left_gripper = GripperConfig(
+                mac_addr=self.xense_left_gripper_mac_addr,
+                rectify_size=self.xense_left_gripper_rectify_size,
+                sensor_output_type=self.xense_left_gripper_sensor_output_type,
+                sensor_keys=self.xense_left_gripper_sensor_keys,
+                gripper_velocity=self.left_gripper_velocity,
+                gripper_force=self.left_gripper_force,
+                gripper_min_pos=self.left_gripper_min_pos,
+                gripper_max_pos=self.left_gripper_max_pos,
+                init_open=self.left_gripper_init_open,
             )
-        else:
-            self.xense_gripper = None
+        if self.use_right_gripper:
+            self.xense_right_gripper = GripperConfig(
+                mac_addr=self.xense_right_gripper_mac_addr,
+                rectify_size=self.xense_right_gripper_rectify_size,
+                sensor_output_type=self.xense_right_gripper_sensor_output_type,
+                sensor_keys=self.xense_right_gripper_sensor_keys,
+                gripper_velocity=self.right_gripper_velocity,
+                gripper_force=self.right_gripper_force,
+                gripper_min_pos=self.right_gripper_min_pos,
+                gripper_max_pos=self.right_gripper_max_pos,
+                init_open=self.right_gripper_init_open,
+            )
+
+        if not self.use_left_gripper:
+            self.xense_left_gripper = None
+        if not self.use_right_gripper:
+            self.xense_right_gripper = None

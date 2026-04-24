@@ -44,6 +44,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .xense_flare import XenseFlare
 
         return XenseFlare(config)
+    elif config.type == "bi_dobot_nova5":
+        from .bi_dobot_nova5 import BiDobotNova5
+
+        return BiDobotNova5(config)
     elif config.type == "pylibfranka_research3":
         from .pylibfranka_research3 import PylibfrankaResearch3
 

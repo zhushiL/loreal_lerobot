@@ -49,7 +49,7 @@ import numpy as np
 
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.dobot_nova5.config_dobot_nova5 import ControlMode, DobotNova5Config
-from lerobot.robots.dobot_nova5.xense_gripper import Gripper
+from lerobot.robots.dh_gripper import DHGripper
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import (
@@ -130,9 +130,9 @@ class DobotNova5(Robot):
 
         self._is_connected = False
 
-        self._xense_gripper: Gripper | None = None
+        self._gripper: DHGripper | None = None
         if config.use_gripper:
-            self._xense_gripper = Gripper(config.xense_gripper)
+            self._gripper = DHGripper(config.dh_gripper)
 
         # Control state - stores the current dobot_api.Mode
         self._current_mode = None
@@ -252,22 +252,9 @@ class DobotNova5(Robot):
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        """Return camera/image features from Xense Gripper and external cameras."""
+        """Return camera/image features from external cameras."""
         features = {}
 
-        if self._xense_gripper and self.config.use_gripper:
-            features["left_tactile"] = (
-                self._xense_gripper._config.rectify_size[1],
-                self._xense_gripper._config.rectify_size[0],
-                3,
-            )
-            features["right_tactile"] = (
-                self._xense_gripper._config.rectify_size[1],
-                self._xense_gripper._config.rectify_size[0],
-                3,
-            )
-
-        # External cameras (e.g., scene cameras)
         for cam in self.cameras:
             features[cam] = (self.config.cameras[cam].height, self.config.cameras[cam].width, 3)
 
@@ -493,25 +480,14 @@ class DobotNova5(Robot):
         self._wait_for_joint_target(target, description)
 
     def _initialize_gripper_position(self) -> None:
-        if self._xense_gripper is None:
+        if self._gripper is None:
             return
-
-        if self.config.xense_gripper_init_open:
-            self._xense_gripper._gripper.set_position_sync(
-                self.config.gripper_max_pos,
-                vmax=self.config.gripper_velocity,
-                fmax=self.config.gripper_force,
-            )
-        else:
-            self._xense_gripper._gripper.set_position_sync(
-                self.config.gripper_min_pos,
-                vmax=self.config.gripper_velocity,
-                fmax=self.config.gripper_force,
-            )
+        target = 1.0 if self.config.dh_gripper_init_open else 0.0
+        self._gripper.initialize_gripper_position(target)
 
     def _current_gripper_position(self) -> float:
-        if self._xense_gripper and self.config.use_gripper:
-            return float(self._xense_gripper.get_gripper_position())
+        if self._gripper and self.config.use_gripper:
+            return float(self._gripper.get_gripper_position())
         return 0.0
 
     def _current_tcp_pose_quat_from_feedback(self) -> np.ndarray:
@@ -606,10 +582,10 @@ class DobotNova5(Robot):
 
             self.logger.info("Robot is now operational.")
 
-            # Connect Xense Gripper end-effector (provides gripper + wrist_cam + tactile)
-            if self._xense_gripper and self.config.use_gripper:
-                self.logger.info("Connecting Xense Gripper...")
-                self._xense_gripper.connect()
+            # Connect DH Gripper end-effector
+            if self._gripper and self.config.use_gripper:
+                self.logger.info("Connecting DH Gripper...")
+                self._gripper.connect()
 
             # Connect external cameras (e.g., scene cameras)
             for cam in self.cameras.values():
@@ -627,10 +603,7 @@ class DobotNova5(Robot):
             self.configure()
 
             mode_desc = self.config.control_mode.value
-            if self._xense_gripper and self.config.use_gripper:
-                gripper_status = "with Xense Gripper (gripper + wrist_cam + tactile)"
-            else:
-                gripper_status = "no gripper"
+            gripper_status = "with DH Gripper" if (self._gripper and self.config.use_gripper) else "no gripper"
             self.logger.info(f"✅ Dobot Nova5 connected and ready in {mode_desc} mode ({gripper_status}).")
 
         except Exception as e:
@@ -656,8 +629,8 @@ class DobotNova5(Robot):
         self._home_tcp_pose = self._current_tcp_pose_quat_from_feedback()
         self.logger.info(f"Home TCP pose: {self._home_tcp_pose}")
         self.logger.info("✅ Robot at home position.")
-        if self._xense_gripper is not None:
-            self.logger.info(f"Gripper position: {self._xense_gripper.get_gripper_position()}")
+        if self._gripper is not None:
+            self.logger.info(f"Gripper position: {self._gripper.get_gripper_position()}")
 
     def _go_to_start(self) -> None:
         """Move robot to start position using MoveJ primitive.
@@ -674,8 +647,8 @@ class DobotNova5(Robot):
         self._move_joint_movj(self.config.start_position_degree, "start position")
         self._initialize_gripper_position()
         self.logger.info("✅ Robot at start position.")
-        if self._xense_gripper is not None:
-            self.logger.info(f"Gripper position: {self._xense_gripper.get_gripper_position()}")
+        if self._gripper is not None:
+            self.logger.info(f"Gripper position: {self._gripper.get_gripper_position()}")
 
     def reset_to_initial_position(self) -> None:
         """Reset robot to initial position based on config.go_to_start.
@@ -767,15 +740,9 @@ class DobotNova5(Robot):
         else:
             raise ValueError(f"Unsupported control_mode: {self.config.control_mode}")
 
-        # Get data from Xense Gripper (gripper + tactile sensors)
-        if self._xense_gripper is not None and self.config.use_gripper:
-            # Read sensors (keys are mapped from SN to sensor_keys names)
-            sensor_data = self._xense_gripper.get_sensor_data()
-            for key, data in sensor_data.items():
-                obs_dict[key] = data
-
-            # Read gripper position
-            obs_dict[self._gripper_key] = self._xense_gripper.get_gripper_position()
+        # Read gripper position
+        if self._gripper is not None and self.config.use_gripper:
+            obs_dict[self._gripper_key] = self._gripper.get_gripper_position()
 
         # External camera observations (scene cameras, etc.)
         for cam_key, cam in self.cameras.items():
@@ -858,8 +825,8 @@ class DobotNova5(Robot):
             tcp_pose_quat[3], tcp_pose_quat[4], tcp_pose_quat[5], tcp_pose_quat[6]
         )
         
-        # Get initial gripper position based on config
-        gripper_pos = self.config.gripper_max_pos if self.config.xense_gripper_init_open else 0.0
+        # Get initial gripper position based on config (1.0 = open, 0.0 = closed)
+        gripper_pos = 1.0 if self.config.dh_gripper_init_open else 0.0
         
         return np.array(
             [tcp_pose_quat[0], tcp_pose_quat[1], tcp_pose_quat[2], 
@@ -1039,18 +1006,17 @@ class DobotNova5(Robot):
         return action
 
     def _send_gripper_action(self, action: dict[str, Any]) -> None:
-        """Send gripper command using Flare Gripper.
+        """Send gripper position command.
 
         Action key: gripper.pos (normalized 0-1)
         """
-        if not self._xense_gripper or not self.config.use_gripper:
+        if not self._gripper or not self.config.use_gripper:
             return
 
         if self._gripper_key not in action:
             return
 
-        # Set gripper position
-        self._xense_gripper.set_gripper_position(action[self._gripper_key])  # normalized [0, 1]
+        self._gripper.set_gripper_position(action[self._gripper_key])
 
     def clear_fault(self) -> bool:
         """Attempt to clear robot fault.
@@ -1107,9 +1073,9 @@ class DobotNova5(Robot):
             if self._feedFour is not None:
                 self._feedFour.close()
 
-            # Disconnect XenseFlare (provides gripper + camera + sensors)
-            if self._xense_gripper and self.config.use_gripper:
-                self._xense_gripper.disconnect()
+            # Disconnect DH Gripper
+            if self._gripper and self.config.use_gripper:
+                self._gripper.disconnect()
 
             # Disconnect external cameras
             for cam in self.cameras.values():
@@ -1120,7 +1086,7 @@ class DobotNova5(Robot):
         finally:
             self._robot = None
             self._feedFour = None
-            self._xense_gripper = None
+            self._gripper = None
             self._is_connected = False
             self._current_mode = None
             self.logger.info("✅ Dobot Nova5 disconnected.")

@@ -46,7 +46,7 @@ from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
     BiDobotNova5Config,
     ControlMode,
 )
-from lerobot.robots.bi_dobot_nova5.xense_gripper import Gripper
+from lerobot.robots.dh_gripper import DHGripper
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import (
@@ -97,13 +97,13 @@ class BiDobotNova5(Robot):
         self._is_connected = False
         self.rt_moving = False  # for teleop loop compatibility
 
-        self._left_gripper: Gripper | None = None
+        self._left_gripper: DHGripper | None = None
         if config.use_left_gripper:
-            self._left_gripper = Gripper(config.xense_left_gripper)
+            self._left_gripper = DHGripper(config.left_dh_gripper)
 
-        self._right_gripper: Gripper | None = None
+        self._right_gripper: DHGripper | None = None
         if config.use_right_gripper:
-            self._right_gripper = Gripper(config.xense_right_gripper)
+            self._right_gripper = DHGripper(config.right_dh_gripper)
 
         self._left_gripper_key = "left_gripper.pos"
         self._right_gripper_key = "right_gripper.pos"
@@ -519,10 +519,10 @@ class BiDobotNova5(Robot):
                 time.sleep(0.1)
 
             if self._left_gripper and self.config.use_left_gripper:
-                self.logger.info("Connecting left Xense Gripper...")
+                self.logger.info("Connecting left DH Gripper...")
                 self._left_gripper.connect()
             if self._right_gripper and self.config.use_right_gripper:
-                self.logger.info("Connecting right Xense Gripper...")
+                self.logger.info("Connecting right DH Gripper...")
                 self._right_gripper.connect()
 
             for cam in self.cameras.values():
@@ -546,27 +546,11 @@ class BiDobotNova5(Robot):
 
     def _initialize_gripper_position(self) -> None:
         if self._left_gripper and self.config.use_left_gripper:
-            left_target = (
-                self.config.left_gripper_max_pos
-                if self.config.left_gripper_init_open
-                else self.config.left_gripper_min_pos
-            )
-            self._left_gripper._gripper.set_position_sync(
-                left_target,
-                vmax=self.config.left_gripper_velocity,
-                fmax=self.config.left_gripper_force,
-            )
+            left_target = 1.0 if self.config.left_dh_gripper_init_open else 0.0
+            self._left_gripper.initialize_gripper_position(left_target)
         if self._right_gripper and self.config.use_right_gripper:
-            right_target = (
-                self.config.right_gripper_max_pos
-                if self.config.right_gripper_init_open
-                else self.config.right_gripper_min_pos
-            )
-            self._right_gripper._gripper.set_position_sync(
-                right_target,
-                vmax=self.config.right_gripper_velocity,
-                fmax=self.config.right_gripper_force,
-            )
+            right_target = 1.0 if self.config.right_dh_gripper_init_open else 0.0
+            self._right_gripper.initialize_gripper_position(right_target)
 
     def _go_to_start(self) -> None:
         if not self.is_connected or self._left_robot is None or self._right_robot is None:
@@ -633,9 +617,10 @@ class BiDobotNova5(Robot):
             if self._left_gripper and self.config.use_left_gripper:
                 return float(self._left_gripper.get_gripper_position())
             return 0.0
-        if self._right_gripper and self.config.use_right_gripper:
-            return float(self._right_gripper.get_gripper_position())
-        return 0.0
+        else:
+            if self._right_gripper and self.config.use_right_gripper:
+                return float(self._right_gripper.get_gripper_position())
+            return 0.0
 
     def get_current_tcp_pose_quat(self) -> tuple[np.ndarray, np.ndarray]:
         if not self.is_connected:

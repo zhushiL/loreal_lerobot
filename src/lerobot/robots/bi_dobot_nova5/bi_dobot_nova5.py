@@ -104,6 +104,8 @@ class BiDobotNova5(Robot):
         self._right_gripper: DHGripper | None = None
         if config.use_right_gripper:
             self._right_gripper = DHGripper(config.right_dh_gripper)
+        self._left_gripper_connected = False
+        self._right_gripper_connected = False
 
         self._left_gripper_key = "left_gripper.pos"
         self._right_gripper_key = "right_gripper.pos"
@@ -520,10 +522,24 @@ class BiDobotNova5(Robot):
 
             if self._left_gripper and self.config.use_left_gripper:
                 self.logger.info("Connecting left DH Gripper...")
-                self._left_gripper.connect()
+                try:
+                    self._left_gripper.connect()
+                    self._left_gripper_connected = True
+                except Exception as e:
+                    self._left_gripper_connected = False
+                    self.logger.error(
+                        f"Failed to connect left DH Gripper, continuing without left gripper control: {e}"
+                    )
             if self._right_gripper and self.config.use_right_gripper:
                 self.logger.info("Connecting right DH Gripper...")
-                self._right_gripper.connect()
+                try:
+                    self._right_gripper.connect()
+                    self._right_gripper_connected = True
+                except Exception as e:
+                    self._right_gripper_connected = False
+                    self.logger.error(
+                        f"Failed to connect right DH Gripper, continuing without right gripper control: {e}"
+                    )
 
             for cam in self.cameras.values():
                 cam.connect()
@@ -542,15 +558,37 @@ class BiDobotNova5(Robot):
             self._right_robot = None
             self._left_feed = None
             self._right_feed = None
+            self._left_gripper_connected = False
+            self._right_gripper_connected = False
             raise
 
     def _initialize_gripper_position(self) -> None:
-        if self._left_gripper and self.config.use_left_gripper:
+        if (
+            self._left_gripper
+            and self.config.use_left_gripper
+            and self._left_gripper_connected
+        ):
             left_target = 1.0 if self.config.left_dh_gripper_init_open else 0.0
-            self._left_gripper.initialize_gripper_position(left_target)
-        if self._right_gripper and self.config.use_right_gripper:
+            try:
+                self._left_gripper.initialize_gripper_position(left_target)
+            except Exception as e:
+                self._left_gripper_connected = False
+                self.logger.error(
+                    f"Left DH gripper init move failed, disabling left gripper commands: {e}"
+                )
+        if (
+            self._right_gripper
+            and self.config.use_right_gripper
+            and self._right_gripper_connected
+        ):
             right_target = 1.0 if self.config.right_dh_gripper_init_open else 0.0
-            self._right_gripper.initialize_gripper_position(right_target)
+            try:
+                self._right_gripper.initialize_gripper_position(right_target)
+            except Exception as e:
+                self._right_gripper_connected = False
+                self.logger.error(
+                    f"Right DH gripper init move failed, disabling right gripper commands: {e}"
+                )
 
     def _go_to_start(self) -> None:
         if not self.is_connected or self._left_robot is None or self._right_robot is None:
@@ -751,10 +789,36 @@ class BiDobotNova5(Robot):
         self._raise_if_dobot_error(robot, response, f"{side} ServoP")
 
     def _send_gripper_action(self, action: dict[str, Any]) -> None:
-        if self._left_gripper and self.config.use_left_gripper and self._left_gripper_key in action:
-            self._left_gripper.set_gripper_position(float(action[self._left_gripper_key]))
-        if self._right_gripper and self.config.use_right_gripper and self._right_gripper_key in action:
-            self._right_gripper.set_gripper_position(float(action[self._right_gripper_key]))
+        if (
+            self._left_gripper
+            and self.config.use_left_gripper
+            and self._left_gripper_connected
+            and self._left_gripper_key in action
+        ):
+            try:
+                self._left_gripper.set_gripper_position(
+                    float(action[self._left_gripper_key])
+                )
+            except Exception as e:
+                self._left_gripper_connected = False
+                self.logger.error(
+                    f"Left DH gripper command failed, disabling left gripper commands for this session: {e}"
+                )
+        if (
+            self._right_gripper
+            and self.config.use_right_gripper
+            and self._right_gripper_connected
+            and self._right_gripper_key in action
+        ):
+            try:
+                self._right_gripper.set_gripper_position(
+                    float(action[self._right_gripper_key])
+                )
+            except Exception as e:
+                self._right_gripper_connected = False
+                self.logger.error(
+                    f"Right DH gripper command failed, disabling right gripper commands for this session: {e}"
+                )
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected or self._left_robot is None or self._right_robot is None:
@@ -829,9 +893,17 @@ class BiDobotNova5(Robot):
             if self._right_feed is not None:
                 self._right_feed.close()
 
-            if self._left_gripper and self.config.use_left_gripper:
+            if (
+                self._left_gripper
+                and self.config.use_left_gripper
+                and self._left_gripper_connected
+            ):
                 self._left_gripper.disconnect()
-            if self._right_gripper and self.config.use_right_gripper:
+            if (
+                self._right_gripper
+                and self.config.use_right_gripper
+                and self._right_gripper_connected
+            ):
                 self._right_gripper.disconnect()
 
             for cam in self.cameras.values():
@@ -845,5 +917,7 @@ class BiDobotNova5(Robot):
             self._right_feed = None
             self._left_gripper = None
             self._right_gripper = None
+            self._left_gripper_connected = False
+            self._right_gripper_connected = False
             self._is_connected = False
             self.logger.info("✅ BiDobot Nova5 disconnected.")

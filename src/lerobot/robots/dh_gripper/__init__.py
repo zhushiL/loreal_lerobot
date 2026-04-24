@@ -15,6 +15,6 @@
 # limitations under the License.
 
 
-from .config_dh_gripper import DHGripperConfig, SensorOutputType  # noqa: F401
+from .config_dh_gripper import DHGripperConfig  # noqa: F401
 from .dh_gripper import DHGripper  # noqa: F401
 

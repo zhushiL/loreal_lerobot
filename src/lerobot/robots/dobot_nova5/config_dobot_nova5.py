@@ -68,7 +68,7 @@ class DobotNova5Config(RobotConfig):
     """
 
     # Robot identification
-    robot_ip: str = "192.168.5.1"  # Robot IP address
+    robot_ip: str = "192.168.5.102"  # Robot IP address
     dashboardPort: int = 29999
     feedPortFour: int = 30004
 
@@ -87,10 +87,16 @@ class DobotNova5Config(RobotConfig):
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
 
-    home_point_list = [270, 0, 90, 0, -90, 0]
+    if robot_ip == "192.168.5.102":
+        home_point_list = [270, 0, 90, 0, -90, 0]
+    elif robot_ip == "192.168.5.101":
+        home_point_list = [-90, 0, -90, 0, 90, 0]
     # Start position parameters (for MoveJ primitive)
     # Joint positions in degrees (factory-defined home position)
-    start_position_degree: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
+    if robot_ip == "192.168.5.102":
+        start_position_degree: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
+    elif robot_ip == "192.168.5.101":
+        start_position_degree: list[float] = field(default_factory=lambda: [-90, 0, -90, 0, 90, 0])
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
 

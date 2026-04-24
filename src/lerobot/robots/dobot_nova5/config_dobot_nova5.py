@@ -24,8 +24,9 @@ from lerobot.robots.dobot_nova5.TCP_IP_Python_V4.dobot_api import DobotApiFeedBa
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.realsense import RealSenseCameraConfig
+from lerobot.cameras.xense import XenseTactileCameraConfig, XenseOutputType
 from lerobot.robots.config import RobotConfig
-from lerobot.robots.dobot_nova5.config_xense_gripper import GripperConfig, SensorOutputType
+from lerobot.robots.dh_gripper import DHGripperConfig  # noqa: F401
 
 
 class ControlMode(str, Enum):
@@ -33,8 +34,8 @@ class ControlMode(str, Enum):
 
     JOINT_MOTION:
         Joint motion control.
-        - Action: joint positions (7D) + gripper (1D) = 8D
-        - Observation: joint positions (7D) + gripper (1D) = 8D
+        - Action: joint positions (6D) + gripper (1D) = 7D
+        - Observation: joint positions (6D) + gripper (1D) = 7D
 
     CARTESIAN_MOTION:
         Cartesian motion control.
@@ -43,7 +44,8 @@ class ControlMode(str, Enum):
     """
 
     JOINT_MOTION = "joint_motion_control"
-    CARTESIAN_MOTION = "cartesian_motio``n_control"
+    CARTESIAN_MOTION = "cartesian_motion_control"
+
 
 @RobotConfig.register_subclass("dobot_nova5")
 @dataclass
@@ -51,20 +53,6 @@ class DobotNova5Config(RobotConfig):
     """Configuration for Dobot Nova5 robot.
 
     The Dobot Nova5 is a 6-DOF collaborative robot with force sensing capabilities.
-
-    Attributes:
-        robot_ip: str = "192.168.1.1"  # Robot IP address
-        control_mode: ControlMode = ControlMode.CARTESIAN_MOTION
-        control_frequency: float = 100.0  # Hz
-        cameras: dict[str, CameraConfig] = field(default_factory=dict)
-
-        # Joint motion constraints (for joint motion control mode)
-        aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
-        gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
-
-        # Cartesian motion parameters
-        aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
-        gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
     """
 
     # Robot identification
@@ -73,24 +61,22 @@ class DobotNova5Config(RobotConfig):
     feedPortFour: int = 30004
 
     # Control settings
-    # control_mode: JOINT_MOTION or CARTESIAN_MOTION
     control_mode: ControlMode = ControlMode.CARTESIAN_MOTION
 
     # NRT mode supports 1-100 Hz
     control_frequency: float = 100.0  # Hz
 
-    # Connection behavior
-    go_to_start: bool = (
-        True  # If True, move robot to start position after connecting. If False, stay at current position.
-    )
+    # Connection behavior: if True, move to start_position_degree after connect
+    go_to_start: bool = True
 
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
-    gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
+    gain: float = 500.0      # PID controller P (200.0-1000.0, default 500.0)
 
     if robot_ip == "192.168.5.102":
         home_point_list = [270, 0, 90, 0, -90, 0]
     elif robot_ip == "192.168.5.101":
         home_point_list = [-90, 0, -90, 0, 90, 0]
+
     # Start position parameters (for MoveJ primitive)
     # Joint positions in degrees (factory-defined home position)
     if robot_ip == "192.168.5.102":
@@ -100,113 +86,96 @@ class DobotNova5Config(RobotConfig):
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
 
-
-    # ======================== Xense Gripper (end-effector) settings ==========
-    # Whether to use the Xense Gripper end-effector
-    # If False, xense_gripper will be None and no gripper functionality is available
+    # ======================== DH Gripper (end-effector) settings ==========
+    # Whether to use the DH Robotics AG-95 gripper end-effector
     use_gripper: bool = False
 
-    # Gripper identification (MAC address / serial number)
-    xense_gripper_mac_addr: str = "e2b26adbb104"
+    # Serial port configuration
+    dh_gripper_port: str = "/dev/ttyUSB0"
+    dh_gripper_slave_id: int = 1
+    dh_gripper_baudrate: int = 115200
+    dh_gripper_force: int = 30       # Target force 20-100 %
+    dh_gripper_init_open: bool = True
 
-    # Tactile sensor settings
-    xense_gripper_rectify_size: tuple[int, int] = (400, 700)
-    xense_gripper_sensor_output_type: SensorOutputType = SensorOutputType.RECTIFY
-    xense_gripper_sensor_keys: dict[str, str] = field(
-        default_factory=lambda: {
-            "OG000657": "right_tactile",
-            "OG000450": "left_tactile",
-        }
-    )
+    # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
+    dh_gripper: DHGripperConfig | None = field(default=None, init=False)
 
-    # Gripper normalization: raw_pos / gripper_max_pos -> [0, 1]
-    gripper_min_pos: float = 0.0
-    gripper_max_pos: float = 85.0
-
-    # Gripper control parameters for set_position()
-    gripper_velocity: float = 80.0  # Maximum velocity mm/s
-    gripper_force: float = 20.0  # Maximum force N
-
-    # Initialize gripper to fully open on connect
-    xense_gripper_init_open: bool = True
-
-    # Auto-created in __post_init__ from xense_gripper_* parameters (do not set directly)
-    xense_gripper: GripperConfig | None = field(default=None, init=False)
-
+    # ======================== Tactile Sensor Configuration ========================
+    # Set enable_tactile_sensors=True to include XenseTactileCameraConfig entries in cameras.
+    # Sensors are keyed by their observation name (e.g. "left_tactile", "right_tactile").
+    enable_tactile_sensors: bool = False
 
     # ======================== Camera Configuration ========================
-    
-    # RealSense cameras (2 cameras recommended: main + wrist)
-    cameras: Dict[str, RealSenseCameraConfig] = field(default_factory=lambda: {
-        # # Main external camera
-        # "head": RealSenseCameraConfig(
-        #     serial_number_or_name="135522074323",
-        #     fps=30,
-        #     width=640,
-        #     height=480,
-        #     color_mode=ColorMode.RGB
-        # ),
-        # # left_wrist camera
-        # "left_wrist": RealSenseCameraConfig(
-        #     serial_number_or_name="249322063436",
-        #     fps=30,
-        #     width=640,
-        #     height=480,
-        #     color_mode=ColorMode.RGB
-        # )
-        # # right_wrist camera
-        # "right_wrist": RealSenseCameraConfig(
-        #     serial_number_or_name="249322063436",
-        #     fps=30,
-        #     width=640,
-        #     height=480,
-        #     color_mode=ColorMode.RGB
-        # )
-    })
+
+    # RealSense cameras (2 cameras recommended: main + wrist).
+    # Tactile sensors are added automatically via enable_tactile_sensors above.
+    cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {})
 
     def __post_init__(self):
         super().__post_init__()
-
+        # self.cameras = {
+            # "head": RealSenseCameraConfig(
+            #     serial_number_or_name="135522074323",
+            #     fps=30,
+            #     width=640,
+            #     height=480,
+            #     color_mode=ColorMode.RGB
+            # ),
+            # # wrist camera
+            # "wrist": RealSenseCameraConfig(
+            #     serial_number_or_name="249322063436",
+            #     fps=30,
+            #     width=640,
+            #     height=480,
+            #     color_mode=ColorMode.RGB
+            # )
+        # }
         # Validate control frequency (NRT mode: 1-100 Hz)
         if not 1 <= self.control_frequency <= 100:
             raise ValueError(
                 f"control_frequency must be between 1 and 100 Hz for NRT mode, got {self.control_frequency}"
             )
 
-        # # Validate joint parameters have correct length (6-DOF robot)
-        # if len(self.joint_max_vel) != 6:
-        #     raise ValueError(f"joint_max_vel must have 6 elements, got {len(self.joint_max_vel)}")
-        # if len(self.joint_max_acc) != 6:
-        #     raise ValueError(f"joint_max_acc must have 6 elements, got {len(self.joint_max_acc)}")
-
-        # # Validate Cartesian/force parameters have correct length (6-DOF)
-        # if len(self.force_control_axis) != 6:
-        #     raise ValueError(f"force_control_axis must have 6 elements, got {len(self.force_control_axis)}")
-        # if len(self.max_contact_wrench) != 6:
-        #     raise ValueError(f"max_contact_wrench must have 6 elements, got {len(self.max_contact_wrench)}")
-        # if len(self.target_wrench) != 6:
-        #     raise ValueError(f"target_wrench must have 6 elements, got {len(self.target_wrench)}")
-
         # Validate start position parameters
         if len(self.start_position_degree) != 6:
             raise ValueError(
                 f"start_position_degree must have 6 elements, got {len(self.start_position_degree)}"
             )
+        if len(self.home_point_list) != 6:
+            raise ValueError(
+                f"home_point_list must have 6 elements, got {len(self.home_point_list)}"
+            )
         if not 1 <= self.start_vel_scale <= 100:
             raise ValueError(f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}")
 
-        # Create XenseGripperConfig from exposed parameters (only if use_gripper=True)
+        # Create DHGripperConfig from exposed parameters (only if use_gripper=True)
         if self.use_gripper:
-            self.xense_gripper = GripperConfig(
-                mac_addr=self.xense_gripper_mac_addr,
-                rectify_size=self.xense_gripper_rectify_size,
-                sensor_output_type=self.xense_gripper_sensor_output_type,
-                sensor_keys=self.xense_gripper_sensor_keys,
-                gripper_velocity=self.gripper_velocity,
-                gripper_force=self.gripper_force,
-                gripper_min_pos=self.gripper_min_pos,
-                gripper_max_pos=self.gripper_max_pos,
-                init_open=self.xense_gripper_init_open,
+            self.dh_gripper = DHGripperConfig(
+                port=self.dh_gripper_port,
+                slave_id=self.dh_gripper_slave_id,
+                baudrate=self.dh_gripper_baudrate,
+                gripper_force=self.dh_gripper_force,
+                init_open=self.dh_gripper_init_open,
             )
         else:
-            self.xense_gripper = None
+            self.dh_gripper = None
+
+        # Inject tactile sensors into cameras dict (only if enable_tactile_sensors=True)
+        if self.enable_tactile_sensors:
+            self.cameras.update(
+                {
+                    "tactile_0": XenseTactileCameraConfig(
+                        serial_number="OG000339",
+                        fps=30,
+                        output_types=[XenseOutputType.RECTIFY],
+                        warmup_s=0.05,
+                    ),
+                    "tactile_1": XenseTactileCameraConfig(
+                        serial_number="OG000450",
+                        fps=30,
+                        output_types=[XenseOutputType.RECTIFY],
+                        warmup_s=0.05,
+                    ),
+                }
+            )
+        pass

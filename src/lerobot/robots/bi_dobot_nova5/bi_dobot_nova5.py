@@ -33,18 +33,18 @@ import re
 import threading
 import time
 from functools import cached_property
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.robots.bi_dobot_nova5.TCP_IP_Python_V4.dobot_api import (
-    DobotApiDashboard,
-    DobotApiFeedBack,
-)
 from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
     BiDobotNova5Config,
     ControlMode,
+)
+from lerobot.robots.bi_dobot_nova5.TCP_IP_Python_V4.dobot_api import (
+    DobotApiDashboard,
+    DobotApiFeedBack,
 )
 from lerobot.robots.dh_gripper import DHGripper
 from lerobot.robots.robot import Robot
@@ -227,16 +227,22 @@ class BiDobotNova5(Robot):
         return self.is_connected
 
     def calibrate(self) -> None:
-        self.logger.info("Dobot Nova5 is factory calibrated, no runtime calibration needed.")
+        self.logger.info(
+            "Dobot Nova5 is factory calibrated, no runtime calibration needed."
+        )
 
     def configure(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        self.logger.info(f"Configuring robot for {self.config.control_mode.value} mode...")
+        self.logger.info(
+            f"Configuring robot for {self.config.control_mode.value} mode..."
+        )
 
     def _parse_dobot_response(self, value_recv: str) -> tuple[int, list[str]]:
         if not isinstance(value_recv, str):
-            raise RuntimeError(f"Invalid Dobot response type: {type(value_recv).__name__}")
+            raise RuntimeError(
+                f"Invalid Dobot response type: {type(value_recv).__name__}"
+            )
         if "Not Tcp" in value_recv:
             raise RuntimeError("Robot is not in TCP control mode")
         match = re.match(r"\s*(-?\d+)\s*,\s*\{([^}]*)\}", value_recv)
@@ -270,10 +276,12 @@ class BiDobotNova5(Robot):
         start_time = time.time()
         while True:
             left_ready = (
-                self._left_feed_data.MessageSize != -1 or self._left_feed_data.RobotMode != -1
+                self._left_feed_data.MessageSize != -1
+                or self._left_feed_data.RobotMode != -1
             )
             right_ready = (
-                self._right_feed_data.MessageSize != -1 or self._right_feed_data.RobotMode != -1
+                self._right_feed_data.MessageSize != -1
+                or self._right_feed_data.RobotMode != -1
             )
             if left_ready and right_ready:
                 return
@@ -357,7 +365,9 @@ class BiDobotNova5(Robot):
             1,
             v=int(self.config.start_vel_scale),
         )
-        self.logger.info(f"{side} {description} MovJ(joint) response: {response.strip()}")
+        self.logger.info(
+            f"{side} {description} MovJ(joint) response: {response.strip()}"
+        )
         values = self._raise_if_dobot_error(robot, response, "MovJ(joint)")
         if values:
             try:
@@ -412,9 +422,13 @@ class BiDobotNova5(Robot):
         feed_client: DobotApiFeedBack,
         feed_state: _FeedState,
         lock: threading.Lock,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         while True:
-            if not self._is_connected and self._left_robot is None and self._right_robot is None:
+            if (
+                not self._is_connected
+                and self._left_robot is None
+                and self._right_robot is None
+            ):
                 return None
             try:
                 feed_info = feed_client.feedBackData()
@@ -485,7 +499,9 @@ class BiDobotNova5(Robot):
                 ("right", self._right_robot, self._right_feed_data),
             ]:
                 if int(feed.RobotMode) == 9:
-                    self.logger.warn(f"{side} robot in error mode before enabling, trying ClearError ...")
+                    self.logger.warn(
+                        f"{side} robot in error mode before enabling, trying ClearError ..."
+                    )
                     self._raise_if_dobot_error(robot, robot.ClearError(), "ClearError")
                     self._wait_until_not_error_mode(robot, feed, side)
                     self.logger.info(f"{side} robot fault cleared")
@@ -496,7 +512,11 @@ class BiDobotNova5(Robot):
                 if enable_error != 0:
                     mode_response = robot.RobotMode()
                     mode_error, mode_values = self._parse_dobot_response(mode_response)
-                    current_mode = int(float(mode_values[0])) if mode_error == 0 and mode_values else -1
+                    current_mode = (
+                        int(float(mode_values[0]))
+                        if mode_error == 0 and mode_values
+                        else -1
+                    )
                     if current_mode not in (5, 6, 7, 8):
                         raise RuntimeError(
                             f"{side} EnableRobot failed with ErrorID {enable_error}: {enable_response.strip()} "
@@ -517,7 +537,9 @@ class BiDobotNova5(Robot):
                 if left_ready and right_ready:
                     break
                 if time.time() - start_time > timeout:
-                    raise RuntimeError("Both robots did not become operational within 30 seconds")
+                    raise RuntimeError(
+                        "Both robots did not become operational within 30 seconds"
+                    )
                 time.sleep(0.1)
 
             if self._left_gripper and self.config.use_left_gripper:
@@ -591,7 +613,11 @@ class BiDobotNova5(Robot):
                 )
 
     def _go_to_start(self) -> None:
-        if not self.is_connected or self._left_robot is None or self._right_robot is None:
+        if (
+            not self.is_connected
+            or self._left_robot is None
+            or self._right_robot is None
+        ):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         self.logger.info("Moving both arms to start position...")
         self._move_joint_movj(
@@ -612,7 +638,11 @@ class BiDobotNova5(Robot):
         self.logger.info("✅ Both arms at start position.")
 
     def _go_to_home(self) -> None:
-        if not self.is_connected or self._left_robot is None or self._right_robot is None:
+        if (
+            not self.is_connected
+            or self._left_robot is None
+            or self._right_robot is None
+        ):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         self.logger.info("Moving both arms to home position...")
         self._move_joint_movj(
@@ -648,7 +678,10 @@ class BiDobotNova5(Robot):
             np.deg2rad(tcp_pose[4]),
             np.deg2rad(tcp_pose[5]),
         )
-        return np.array([pos_m[0], pos_m[1], pos_m[2], quat[0], quat[1], quat[2], quat[3]], dtype=np.float32)
+        return np.array(
+            [pos_m[0], pos_m[1], pos_m[2], quat[0], quat[1], quat[2], quat[3]],
+            dtype=np.float32,
+        )
 
     def _read_gripper_pos(self, side: str) -> float:
         if side == "left":
@@ -821,7 +854,11 @@ class BiDobotNova5(Robot):
                 )
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.is_connected or self._left_robot is None or self._right_robot is None:
+        if (
+            not self.is_connected
+            or self._left_robot is None
+            or self._right_robot is None
+        ):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         if int(self._left_feed_data.RobotMode) == 9:
@@ -864,7 +901,9 @@ class BiDobotNova5(Robot):
         if int(self._right_feed_data.RobotMode) == 9:
             try:
                 self._raise_if_dobot_error(
-                    self._right_robot, self._right_robot.ClearError(), "right ClearError"
+                    self._right_robot,
+                    self._right_robot.ClearError(),
+                    "right ClearError",
                 )
             except Exception as e:
                 self.logger.error(f"Failed to clear right fault: {e}")

@@ -229,6 +229,7 @@ from lerobot.robots import (  # noqa: F401
     bi_flexiv_rizon4_rt,
     dobot_nova5,
     bi_xense_flare_grippers,
+    dobot_nova5,
     flexiv_rizon4,
     flexiv_rizon4_rt,
     make_robot_from_config,
@@ -238,6 +239,7 @@ from lerobot.robots import (  # noqa: F401
     xense_multisensor,
     mock_robot,
     dobot_nova5,
+    xense_multisensor,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -2469,6 +2471,7 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop = make_teleoperator_from_config(cfg.teleop)
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
+
             from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
                 ControlMode as BiDobotNova5ControlMode,
             )

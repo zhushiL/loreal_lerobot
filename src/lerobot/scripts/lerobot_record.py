@@ -1454,6 +1454,19 @@ def record_loop(
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
         if (
+            isinstance(teleop, Teleoperator)
+            and teleop.name == "bi_pico4"
+            and hasattr(teleop, "get_reset_button")
+            and teleop.get_reset_button()
+            and hasattr(robot, "reset_to_initial_position")
+        ):
+            logger.info("BiPico4 reset requested (A button).")
+            robot.reset_to_initial_position()
+            _sync_rt_teleop_to_robot_pose(robot, teleop)
+            timestamp = time.perf_counter() - start_episode_t
+            continue
+
+        if (
             events["go_start"]
             and isinstance(teleop, Teleoperator)
             and teleop.name == "pico4"

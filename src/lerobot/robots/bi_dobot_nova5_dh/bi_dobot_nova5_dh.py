@@ -62,21 +62,28 @@ _MODBUS_RETRIES = 3
 class _DobotModbusRTU:
     """Thin adapter that exposes a ModbusRTUProtocol interface over DobotApiDashboard.
 
-    Calls ModbusRTUCreate on construction to establish the RS485 Modbus master, then
-    forwards read_register / write_register calls through GetHoldRegs / SetHoldRegs.
-    ModbusClose is issued in close().
+    Calls ModbusCreate(..., isRTU=True) on construction to establish the RS485
+    Modbus master, then forwards read_register / write_register calls through
+    GetHoldRegs / SetHoldRegs. ModbusClose is issued in close().
 
     This class lives here (not in a separate module) because it is tightly coupled to
     DobotApiDashboard and only makes sense in the context of BiDobotNova5.
     """
 
-    def __init__(self, robot: DobotApiDashboard, slave_id: int, baudrate: int) -> None:
+    def __init__(
+        self,
+        robot: DobotApiDashboard,
+        master_ip: str,
+        master_port: int,
+        slave_id: int,
+        is_rtu: bool = True,
+    ) -> None:
         self._robot = robot
-        resp = robot.ModbusRTUCreate(slave_id, baudrate)
+        resp = self._robot.ModbusCreate(master_ip, master_port, slave_id, is_rtu)
         error_id, values = self._parse(resp)
         if error_id != 0 or not values:
             raise RuntimeError(
-                f"ModbusRTUCreate failed (error_id={error_id}): {resp.strip()}"
+                f"ModbusCreate failed (error_id={error_id}): {resp.strip()}"
             )
         self._index: int = int(values[0])
 
@@ -159,11 +166,15 @@ class BiDobotNova5DH(Robot):
 
         self._left_gripper: DHGripperIntegrated | None = None
         if config.use_left_gripper:
-            self._left_gripper = DHGripperIntegrated(config.left_dh_gripper, name="left")
+            self._left_gripper = DHGripperIntegrated(
+                config.left_dh_gripper, name="left"
+            )
 
         self._right_gripper: DHGripperIntegrated | None = None
         if config.use_right_gripper:
-            self._right_gripper = DHGripperIntegrated(config.right_dh_gripper, name="right")
+            self._right_gripper = DHGripperIntegrated(
+                config.right_dh_gripper, name="right"
+            )
         self._left_gripper_connected = False
         self._right_gripper_connected = False
 
@@ -605,10 +616,26 @@ class BiDobotNova5DH(Robot):
             if self._left_gripper and self.config.use_left_gripper:
                 self.logger.info("Connecting left DH Gripper via robot RS485...")
                 try:
+                    self._raise_if_dobot_error(
+                        self._left_robot,
+                        self._left_robot.SetToolMode(1, 1, self.config.left_tool_identify),
+                        "left SetToolMode",
+                    )
+                    self._raise_if_dobot_error(
+                        self._left_robot,
+                        self._left_robot.SetTool485(
+                            self.config.left_dh_gripper_baudrate,
+                            "N",
+                            1,
+                            self.config.left_tool_identify,
+                        ),
+                        "left SetTool485",
+                    )
                     left_modbus = _DobotModbusRTU(
                         self._left_robot,
+                        self.config.left_master_ip,
+                        self.config.left_master_port,
                         self.config.left_dh_gripper.slave_id,
-                        self.config.left_dh_gripper.baudrate,
                     )
                     self._left_gripper.connect(left_modbus)
                     self._left_gripper_connected = True
@@ -620,10 +647,26 @@ class BiDobotNova5DH(Robot):
             if self._right_gripper and self.config.use_right_gripper:
                 self.logger.info("Connecting right DH Gripper via robot RS485...")
                 try:
+                    self._raise_if_dobot_error(
+                        self._right_robot,
+                        self._right_robot.SetToolMode(1, 1, self.config.right_tool_identify),
+                        "right SetToolMode",
+                    )
+                    self._raise_if_dobot_error(
+                        self._right_robot,
+                        self._right_robot.SetTool485(
+                            self.config.right_dh_gripper_baudrate,
+                            "N",
+                            1,
+                            self.config.right_tool_identify,
+                        ),
+                        "right SetTool485",
+                    )
                     right_modbus = _DobotModbusRTU(
                         self._right_robot,
+                        self.config.right_master_ip,
+                        self.config.right_master_port,
                         self.config.right_dh_gripper.slave_id,
-                        self.config.right_dh_gripper.baudrate,
                     )
                     self._right_gripper.connect(right_modbus)
                     self._right_gripper_connected = True

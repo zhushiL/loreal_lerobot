@@ -96,12 +96,19 @@ class BiDobotNova5DHConfig(RobotConfig):
     use_right_gripper: bool = True
 
     # Left gripper Modbus RTU configuration
+    left_master_ip: str = "192.168.201.1"
+    left_master_port: int = 60000
+    left_tool_identify: int = 1
+
     left_dh_gripper_slave_id: int = 1
     left_dh_gripper_baudrate: int = 115200
     left_dh_gripper_force: int = 30  # 20-100 %
     left_dh_gripper_init_open: bool = True
 
     # Right gripper Modbus RTU configuration
+    right_master_ip: str = "192.168.201.1"
+    right_master_port: int = 60000
+    right_tool_identify: int = 1
     right_dh_gripper_slave_id: int = 1
     right_dh_gripper_baudrate: int = 115200
     right_dh_gripper_force: int = 30  # 20-100 %
@@ -173,6 +180,14 @@ class BiDobotNova5DHConfig(RobotConfig):
         if not 1 <= self.start_vel_scale <= 100:
             raise ValueError(
                 f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}"
+            )
+        if self.left_tool_identify not in (1, 2):
+            raise ValueError(
+                f"left_tool_identify must be 1 or 2, got {self.left_tool_identify}"
+            )
+        if self.right_tool_identify not in (1, 2):
+            raise ValueError(
+                f"right_tool_identify must be 1 or 2, got {self.right_tool_identify}"
             )
 
         # Create DHGripperIntegratedConfig from exposed parameters (only if use_*_gripper=True)

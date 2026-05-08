@@ -25,9 +25,9 @@ class DHGripperIntegratedConfig:
     """Configuration for DHGripperIntegrated.
 
     Communication is routed through the robot arm controller's built-in RS485
-    end-effector port using the Dobot SDK Modbus RTU API (ModbusRTUCreate /
-    GetHoldRegs / SetHoldRegs / ModbusClose). No USB-serial adapter or pyserial
-    dependency is required.
+    end-effector port using the Dobot SDK Modbus proxy API
+    (ModbusCreate with isRTU=True / GetHoldRegs / SetHoldRegs / ModbusClose).
+    No USB-serial adapter or pyserial dependency is required.
 
     Position convention (DH hardware register):
         0    = fully closed

@@ -127,7 +127,12 @@ class DHGripperIntegrated:
 
         cfg = DHGripperIntegratedConfig(slave_id=1, baudrate=115200)
         g = DHGripperIntegrated(cfg, name="right")
-        modbus = _DobotModbusRTU(robot_dashboard, cfg.slave_id, cfg.baudrate)
+        modbus = _DobotModbusRTU(
+            robot_dashboard,
+            master_ip="192.168.201.1",
+            master_port=60000,
+            slave_id=cfg.slave_id,
+        )
         g.connect(modbus)
         g.set_gripper_position(0.5)
         print(g.get_gripper_position())
@@ -245,7 +250,7 @@ class DHGripperIntegrated:
         """Initialise the gripper using an already-established Modbus RTU connection.
 
         The caller (BiDobotNova5) is responsible for creating the Modbus RTU master
-        (via ModbusRTUCreate) before calling this method.
+        (via ModbusCreate with isRTU=True) before calling this method.
 
         Args:
             modbus: A ModbusRTUProtocol instance providing read/write/close.

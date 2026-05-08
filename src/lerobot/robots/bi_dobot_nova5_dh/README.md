@@ -31,7 +31,9 @@ Dobot Nova5 控制器（TCP 端口 29999，`DobotApiDashboard`）提供了一组
 
 | SDK 函数 | 对应 Modbus 功能 | 说明 |
 |---|---|---|
-| `ModbusRTUCreate(slave_id, baud)` | — | 建立 RS485 主站，返回 `master_index` |
+| `SetToolMode(1, 1, identify)` | — | 将末端接口设置为 RS485 Modbus 工具模式 |
+| `SetTool485(baud, "N", 1, identify)` | — | 配置末端 RS485 为 8N1 |
+| `ModbusCreate("192.168.201.1", 60000, slave_id, isRTU=True)` | — | 建立 RS485 主站，返回 `master_index` |
 | `SetHoldRegs(index, addr, count, val)` | FC=0x06 | 写保持寄存器 |
 | `GetHoldRegs(index, addr, count)` | FC=0x03 | 读保持寄存器 |
 | `ModbusClose(index)` | — | 关闭主站 |
@@ -51,7 +53,7 @@ BiDobotNova5DH
   ├── DobotApiDashboard          左/右臂 TCP 控制连接
   │
   ├── _DobotModbusRTU            Modbus 适配器（定义于 bi_dobot_nova5_dh.py）
-  │     ├── __init__: ModbusRTUCreate → 存储 master_index
+  │     ├── __init__: ModbusCreate(isRTU=True) → 存储 master_index
   │     ├── read_register()  → GetHoldRegs(index, reg, 1)
   │     ├── write_register() → SetHoldRegs(index, reg, 1, val)
   │     └── close()          → ModbusClose(index)
@@ -100,8 +102,10 @@ BiDobotNova5DH.connect()
 ├─ 3. EnableRobot，等待两臂 RobotMode=5（就绪）
 │
 ├─ 4. 对每个夹爪（以右臂为例）：
-│     _DobotModbusRTU(self._right_robot, slave_id, baudrate)
-│         └─ robot.ModbusRTUCreate(slave_id, baud)
+│     robot.SetToolMode(1, 1, identify)
+│     robot.SetTool485(baud, "N", 1, identify)
+│     _DobotModbusRTU(self._right_robot, master_ip, master_port, slave_id)
+│         └─ robot.ModbusCreate(master_ip, master_port, slave_id, isRTU=True)
 │            → 控制器在末端 RS485 建立主站，返回 master_index
 │     self._right_gripper.connect(right_modbus)
 │         ├─ 读 0x0200：若已初始化则跳过
@@ -146,10 +150,16 @@ config = BiDobotNova5DHConfig(
     control_mode=ControlMode.JOINT_MOTION,
     use_left_gripper=True,
     use_right_gripper=True,
+    left_master_ip="192.168.201.1",
+    left_master_port=60000,
+    left_tool_identify=1,
     left_dh_gripper_slave_id=1,
     left_dh_gripper_baudrate=115200,
     left_dh_gripper_force=30,       # 20–100 %
     left_dh_gripper_init_open=True,
+    right_master_ip="192.168.201.1",
+    right_master_port=60000,
+    right_tool_identify=1,
     right_dh_gripper_slave_id=1,
     right_dh_gripper_baudrate=115200,
     right_dh_gripper_force=30,
@@ -157,6 +167,37 @@ config = BiDobotNova5DHConfig(
 )
 robot = BiDobotNova5DH(config)
 robot.connect()
+```
+
+BiDobotNova5DH 夹爪相关参数：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `left/right_master_ip` | `192.168.201.1` | Dobot 末端 RS485 Modbus 代理 IP |
+| `left/right_master_port` | `60000` | Dobot 末端 RS485 Modbus 代理端口 |
+| `left/right_tool_identify` | `1` | 多航插机型的末端接口编号（1 或 2） |
+| `left/right_dh_gripper_slave_id` | `1` | DH 夹爪 Modbus 从站 ID |
+| `left/right_dh_gripper_baudrate` | `115200` | DH 夹爪 RS485 波特率 |
+
+### 夹爪开合快速测试
+
+本目录提供了一个只测试 DH AG-95 夹爪开合的脚本。脚本只连接所选机械臂的 Dashboard 端口和末端 RS485 Modbus，不发送机械臂运动指令。
+
+```bash
+# 默认测试右侧夹爪：192.168.5.102
+python3 src/lerobot/robots/bi_dobot_nova5_dh/test_dh_gripper_open_close.py
+
+# 测试左侧夹爪
+python3 src/lerobot/robots/bi_dobot_nova5_dh/test_dh_gripper_open_close.py --side left --left-ip 192.168.5.101
+
+# 修改循环次数和每次动作后的等待时间
+python3 src/lerobot/robots/bi_dobot_nova5_dh/test_dh_gripper_open_close.py --cycles 5 --hold-s 1.0
+
+# 如果你的夹爪 RS485 参数不是 115200,N,1，可以显式指定
+python3 src/lerobot/robots/bi_dobot_nova5_dh/test_dh_gripper_open_close.py --baudrate 115200 --parity N --stop-bit 1
+
+# 如果 ModbusCreate 成功但 GetHoldRegs/SetHoldRegs 返回 -1，可尝试重启末端工具电源
+python3 src/lerobot/robots/bi_dobot_nova5_dh/test_dh_gripper_open_close.py --power-cycle --power-wait-s 3.0
 ```
 
 ### DHGripperIntegratedConfig

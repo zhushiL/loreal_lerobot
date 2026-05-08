@@ -18,15 +18,12 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict
-
-from lerobot.robots.bi_dobot_nova5.TCP_IP_Python_V4.dobot_api import DobotApiFeedBack,DobotApiDashboard
 
 from lerobot.cameras.configs import CameraConfig
-from lerobot.cameras.realsense import RealSenseCameraConfig
+from lerobot.cameras.xense import XenseOutputType, XenseTactileCameraConfig
 from lerobot.robots.config import RobotConfig
 from lerobot.robots.dh_gripper import DHGripperConfig  # noqa: F401
-from lerobot.cameras.xense import XenseTactileCameraConfig, XenseOutputType
+
 
 class ControlMode(str, Enum):
     """Control mode for BiDobot Nova5.
@@ -72,14 +69,22 @@ class BiDobotNova5Config(RobotConfig):
     go_to_start: bool = True
 
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
-    gain: float = 500.0      # PID controller P (200.0-1000.0, default 500.0)
+    gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
 
-    left_home_point_list: list[float] = field(default_factory=lambda: [-90, 0, -90, 0, 90, 0])
-    right_home_point_list: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
+    left_home_point_list: list[float] = field(
+        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+    )
+    right_home_point_list: list[float] = field(
+        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+    )
 
     # Start position parameters (for MoveJ primitive)
-    left_start_position_degree: list[float] = field(default_factory=lambda: [-90, 0, -90, 0, 90, 0])
-    right_start_position_degree: list[float] = field(default_factory=lambda: [270, 0, 90, 0, -90, 0])
+    left_start_position_degree: list[float] = field(
+        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+    )
+    right_start_position_degree: list[float] = field(
+        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+    )
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
 
@@ -92,14 +97,14 @@ class BiDobotNova5Config(RobotConfig):
     left_dh_gripper_port: str = "/dev/ttyDHLeft"
     left_dh_gripper_slave_id: int = 1
     left_dh_gripper_baudrate: int = 115200
-    left_dh_gripper_force: int = 30       # 20-100 %
+    left_dh_gripper_force: int = 30  # 20-100 %
     left_dh_gripper_init_open: bool = True
 
     # Right gripper serial port configuration
     right_dh_gripper_port: str = "/dev/ttyDHRight"
     right_dh_gripper_slave_id: int = 1
     right_dh_gripper_baudrate: int = 115200
-    right_dh_gripper_force: int = 30      # 20-100 %
+    right_dh_gripper_force: int = 30  # 20-100 %
     right_dh_gripper_init_open: bool = True
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
@@ -114,7 +119,7 @@ class BiDobotNova5Config(RobotConfig):
     # ======================== Camera Configuration ========================
 
     # cameras (2 cameras recommended: main + wrist)
-    cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {})
+    cameras: dict[str, CameraConfig] = field(default_factory=lambda: {})
 
     def __post_init__(self):
         super().__post_init__()
@@ -150,15 +155,25 @@ class BiDobotNova5Config(RobotConfig):
 
         # Validate start position parameters
         if len(self.left_start_position_degree) != 6:
-            raise ValueError(f"left_start_position_degree must have 6 elements, got {len(self.left_start_position_degree)}")
+            raise ValueError(
+                f"left_start_position_degree must have 6 elements, got {len(self.left_start_position_degree)}"
+            )
         if len(self.right_start_position_degree) != 6:
-            raise ValueError(f"right_start_position_degree must have 6 elements, got {len(self.right_start_position_degree)}")
+            raise ValueError(
+                f"right_start_position_degree must have 6 elements, got {len(self.right_start_position_degree)}"
+            )
         if len(self.left_home_point_list) != 6:
-            raise ValueError(f"left_home_point_list must have 6 elements, got {len(self.left_home_point_list)}")
+            raise ValueError(
+                f"left_home_point_list must have 6 elements, got {len(self.left_home_point_list)}"
+            )
         if len(self.right_home_point_list) != 6:
-            raise ValueError(f"right_home_point_list must have 6 elements, got {len(self.right_home_point_list)}")
+            raise ValueError(
+                f"right_home_point_list must have 6 elements, got {len(self.right_home_point_list)}"
+            )
         if not 1 <= self.start_vel_scale <= 100:
-            raise ValueError(f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}")
+            raise ValueError(
+                f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}"
+            )
 
         # Create DHGripperConfig from exposed parameters (only if use_*_gripper=True)
         if self.use_left_gripper:

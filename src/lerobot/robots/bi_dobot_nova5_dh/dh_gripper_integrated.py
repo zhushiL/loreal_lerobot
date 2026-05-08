@@ -42,21 +42,23 @@ Conversion:
     dh_pos     = int(round(normalized * 1000))
     normalized = dh_pos / 1000.0
 
-Threading note
---------------
-All Modbus calls go through DobotApiDashboard's TCP socket (port 29999), shared with
-arm control commands (ServoJ / ServoP). DobotApiDashboard.sendRecvMsg is protected by
-an internal __globalLock, so concurrent calls from the background poll thread and the
-main control thread are automatically serialized — no additional locking is needed.
+Worker note
+-----------
+A daemon worker thread owns the periodic gripper Modbus traffic. The robot control
+loop only updates the latest target position in memory; the worker sends changed
+targets at config.worker_frequency and refreshes _cached_position at
+config.position_poll_frequency. This is best effort: if a Modbus round trip takes
+longer than the configured period, the worker continues immediately on the next
+iteration.
 
-A daemon thread polls _REG_CUR_POS at ~20 Hz and updates _cached_position.
-get_gripper_position() returns this cached value (non-blocking).
+get_gripper_position() and set_gripper_position() are both non-blocking in the
+normal teleoperation path.
 """
 
 from __future__ import annotations
 
 import time
-from threading import Thread
+from threading import Lock, Thread
 from typing import Protocol
 
 from lerobot.robots.bi_dobot_nova5_dh.config_dh_gripper_integrated import (
@@ -87,7 +89,6 @@ _GRIP_REACHED = 1  # target reached without contact
 _GRIP_GRIPPED = 2  # gripped an object
 _GRIP_DROPPED = 3  # object dropped
 
-_POLL_INTERVAL_S          = 0.05    # 20 Hz background position poll
 _POLL_FAIL_LOG_THRESHOLD  = 20
 _POLL_FAIL_REPEAT_INTERVAL = 100
 _SYNC_POLL_INTERVAL_S     = 0.05
@@ -148,41 +149,97 @@ class DHGripperIntegrated:
 
         self._modbus: ModbusRTUProtocol | None = None
 
-        # Pre-seeded from init_open; updated by the background poller.
+        # Pre-seeded from init_open; updated by the background worker.
         self._cached_position: float = 1.0 if config.init_open else 0.0
 
-        self._poll_thread: Thread | None = None
-        self._poll_running: bool = False
+        self._io_lock = Lock()
+        self._state_lock = Lock()
+        self._worker_thread: Thread | None = None
+        self._worker_running: bool = False
+        self._target_position: float | None = self._cached_position
+        self._target_dirty: bool = False
+        self._last_sent_position: float | None = None
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _write_register(self, reg: int, value: int) -> bool:
-        if self._modbus is None:
-            return False
-        return self._modbus.write_register(reg, value)
+        with self._io_lock:
+            if self._modbus is None:
+                return False
+            return self._modbus.write_register(reg, value)
 
     def _read_register(self, reg: int) -> int | None:
-        if self._modbus is None:
-            return None
-        return self._modbus.read_register(reg)
+        with self._io_lock:
+            if self._modbus is None:
+                return None
+            return self._modbus.read_register(reg)
 
-    # ── Background position poller ────────────────────────────────────────────
+    # ── Background Modbus worker ──────────────────────────────────────────────
 
-    def _position_poll_loop(self) -> None:
-        """Daemon thread: continuously refresh _cached_position from hardware.
-
-        DobotApiDashboard.sendRecvMsg is protected by an internal __globalLock,
-        so concurrent calls from this thread and the main control thread are
-        automatically serialized — no additional locking is needed here.
-        """
+    def _worker_loop(self) -> None:
+        """Daemon thread: send latest target and refresh cached position."""
+        interval_s = 1.0 / self._config.worker_frequency
+        read_interval_s = 1.0 / self._config.position_poll_frequency
+        next_read_time = time.monotonic()
         consecutive_failures = 0
-        while self._poll_running:
+        while self._worker_running:
+            tick_start = time.monotonic()
+
+            with self._state_lock:
+                target_position = self._target_position
+                target_dirty = self._target_dirty
+                last_sent_position = self._last_sent_position
+
+            if target_dirty and target_position is not None:
+                target_dh_pos = int(round(target_position * _DH_POS_OPEN))
+                last_sent_dh_pos = (
+                    None
+                    if last_sent_position is None
+                    else int(round(last_sent_position * _DH_POS_OPEN))
+                )
+                should_send = (
+                    last_sent_position is None
+                    or (
+                        target_dh_pos != last_sent_dh_pos
+                        and (
+                            self._config.command_epsilon == 0.0
+                            or abs(target_position - last_sent_position)
+                            > self._config.command_epsilon
+                        )
+                    )
+                )
+                if should_send:
+                    if self._write_register(_REG_POSITION, target_dh_pos):
+                        with self._state_lock:
+                            self._last_sent_position = target_position
+                            if (
+                                self._target_position is not None
+                                and abs(self._target_position - target_position) < 1e-9
+                            ):
+                                self._target_dirty = False
+                    else:
+                        consecutive_failures += 1
+                else:
+                    with self._state_lock:
+                        if (
+                            self._target_position is not None
+                            and abs(self._target_position - target_position) < 1e-9
+                        ):
+                            self._target_dirty = False
+
+            now = time.monotonic()
+            if now < next_read_time:
+                elapsed = now - tick_start
+                time.sleep(max(0.0, interval_s - elapsed))
+                continue
+
+            next_read_time = now + read_interval_s
             raw = self._read_register(_REG_CUR_POS)
             if raw is None:
                 consecutive_failures += 1
                 if consecutive_failures == _POLL_FAIL_LOG_THRESHOLD:
                     self._logger.error(
-                        f"DHGripperIntegrated: position cache stale after "
+                        f"DHGripperIntegrated: Modbus worker unhealthy after "
                         f"{consecutive_failures} consecutive read failures."
                     )
                 elif (
@@ -195,7 +252,8 @@ class DHGripperIntegrated:
                         f"DHGripperIntegrated: still unhealthy — "
                         f"{consecutive_failures} consecutive failures."
                     )
-                time.sleep(_POLL_INTERVAL_S)
+                elapsed = time.monotonic() - tick_start
+                time.sleep(max(0.0, interval_s - elapsed))
                 continue
 
             if consecutive_failures >= _POLL_FAIL_LOG_THRESHOLD:
@@ -206,8 +264,11 @@ class DHGripperIntegrated:
             consecutive_failures = 0
 
             raw_clamped = max(_DH_POS_CLOSED, min(raw, _DH_POS_OPEN))
-            self._cached_position = raw_clamped / _DH_POS_OPEN
-            time.sleep(_POLL_INTERVAL_S)
+            with self._state_lock:
+                self._cached_position = raw_clamped / _DH_POS_OPEN
+
+            elapsed = time.monotonic() - tick_start
+            time.sleep(max(0.0, interval_s - elapsed))
 
     # ── Hardware initialisation ───────────────────────────────────────────────
 
@@ -265,6 +326,10 @@ class DHGripperIntegrated:
         self._modbus = modbus
         self._is_connected = True
         self._cached_position = 1.0 if self._config.init_open else 0.0
+        with self._state_lock:
+            self._target_position = self._cached_position
+            self._target_dirty = False
+            self._last_sent_position = None
 
         try:
             self._hardware_initialize()
@@ -286,12 +351,19 @@ class DHGripperIntegrated:
             self._logger.info("Opening gripper to initial position...")
             self._write_register(_REG_POSITION, _DH_POS_OPEN)
             self._cached_position = 1.0
+            with self._state_lock:
+                self._target_position = 1.0
+                self._target_dirty = False
+                self._last_sent_position = 1.0
 
-        self._poll_running = True
-        self._poll_thread = Thread(target=self._position_poll_loop, daemon=True)
-        self._poll_thread.start()
+        self._worker_running = True
+        self._worker_thread = Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
 
-        self._logger.info("DH gripper connected via robot RS485 Modbus RTU.")
+        self._logger.info(
+            f"DH gripper connected via robot RS485 Modbus RTU "
+            f"(worker_frequency={self._config.worker_frequency:.1f} Hz)."
+        )
 
     def disconnect(self) -> None:
         """Open the gripper and close the Modbus RTU master.
@@ -302,10 +374,10 @@ class DHGripperIntegrated:
         if not self._is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        self._poll_running = False
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=1.0)
-            self._poll_thread = None
+        self._worker_running = False
+        if self._worker_thread is not None:
+            self._worker_thread.join(timeout=1.0)
+            self._worker_thread = None
 
         self._logger.info("Opening DH gripper before disconnect...")
         self._write_register(_REG_POSITION, _DH_POS_OPEN)
@@ -322,7 +394,7 @@ class DHGripperIntegrated:
     def get_gripper_position(self) -> float:
         """Return the current normalized gripper position in [0, 1].
 
-        Returns the value cached by the background poller (non-blocking).
+        Returns the value cached by the background worker (non-blocking).
         Returns 0.0 if not connected.
 
         Returns:
@@ -330,7 +402,8 @@ class DHGripperIntegrated:
         """
         if not self._is_connected:
             return 0.0
-        return self._cached_position
+        with self._state_lock:
+            return self._cached_position
 
     def set_gripper_position(self, normalized_pos: float) -> None:
         """Send a position command (non-blocking).
@@ -342,9 +415,26 @@ class DHGripperIntegrated:
             raise DeviceNotConnectedError("DH gripper is not connected.")
         if not 0.0 <= normalized_pos <= 1.0:
             raise ValueError(f"normalized_pos must be in [0, 1], got {normalized_pos}.")
-        dh_pos = int(round(normalized_pos * _DH_POS_OPEN))
-        if self._write_register(_REG_POSITION, dh_pos):
-            self._cached_position = normalized_pos
+        with self._state_lock:
+            target_dh_pos = int(round(normalized_pos * _DH_POS_OPEN))
+            last_sent_dh_pos = (
+                None
+                if self._last_sent_position is None
+                else int(round(self._last_sent_position * _DH_POS_OPEN))
+            )
+            target_changed = (
+                last_sent_dh_pos is None
+                or (
+                    target_dh_pos != last_sent_dh_pos
+                    and (
+                        self._config.command_epsilon == 0.0
+                        or abs(normalized_pos - self._last_sent_position)
+                        > self._config.command_epsilon
+                    )
+                )
+            )
+            self._target_position = normalized_pos
+            self._target_dirty = target_changed
 
     def set_gripper_position_sync(
         self,
@@ -367,7 +457,11 @@ class DHGripperIntegrated:
 
         dh_pos = int(round(normalized_pos * _DH_POS_OPEN))
         if self._write_register(_REG_POSITION, dh_pos):
-            self._cached_position = normalized_pos
+            with self._state_lock:
+                self._cached_position = normalized_pos
+                self._target_position = normalized_pos
+                self._target_dirty = False
+                self._last_sent_position = normalized_pos
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

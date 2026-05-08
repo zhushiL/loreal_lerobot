@@ -46,6 +46,14 @@ class DHGripperIntegratedConfig:
         init_open:     If True, move gripper to fully open after hardware init.
         init_timeout:  Seconds to wait for hardware self-initialisation
                        (register 0x0100 → 0xA5 sequence, default 10.0 s).
+        worker_frequency: Best-effort background Modbus worker loop frequency in Hz.
+                          Must be at least 10 Hz. Defaults to 100 Hz to match the
+                          Nova5 NRT control-rate ceiling.
+        position_poll_frequency: Background current-position read frequency in Hz.
+                                 Kept lower than worker_frequency by default to
+                                 avoid flooding the shared Dashboard socket.
+        command_epsilon: Minimum normalized target-position change before the
+                         worker sends another position register write.
     """
 
     slave_id: int = 1
@@ -54,6 +62,9 @@ class DHGripperIntegratedConfig:
     gripper_force: int = 30
     init_open: bool = True
     init_timeout: float = 10.0
+    worker_frequency: float = 100.0
+    position_poll_frequency: float = 20.0
+    command_epsilon: float = 0.0
 
     def __post_init__(self):
         if not 1 <= self.slave_id <= 247:
@@ -81,4 +92,19 @@ class DHGripperIntegratedConfig:
             raise ValueError(
                 f"DHGripperIntegratedConfig: init_timeout must be positive, "
                 f"got {self.init_timeout}."
+            )
+        if self.worker_frequency < 10.0:
+            raise ValueError(
+                f"DHGripperIntegratedConfig: worker_frequency must be at least 10 Hz, "
+                f"got {self.worker_frequency}."
+            )
+        if not 0.0 < self.position_poll_frequency <= self.worker_frequency:
+            raise ValueError(
+                "DHGripperIntegratedConfig: position_poll_frequency must be in "
+                f"(0, worker_frequency], got {self.position_poll_frequency}."
+            )
+        if not 0.0 <= self.command_epsilon <= 1.0:
+            raise ValueError(
+                f"DHGripperIntegratedConfig: command_epsilon must be in [0, 1], "
+                f"got {self.command_epsilon}."
             )

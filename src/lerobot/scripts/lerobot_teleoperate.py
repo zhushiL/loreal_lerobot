@@ -195,6 +195,18 @@ lerobot-teleoperate \
     --dryrun=true
 ```
 
+Example (BiDobot Nova5 DH + BiPico4):
+
+```shell
+lerobot-teleoperate \
+    --robot.type=bi_dobot_nova5_dh \
+    --robot.left_robot_ip=192.168.5.101 \
+    --robot.right_robot_ip=192.168.5.102 \
+    --teleop.type=bi_pico4 \
+    --fps=30 \
+    --display_data=true
+```
+
 """
 
 import time
@@ -213,15 +225,16 @@ from lerobot.robots import (  # noqa: F401
     arx5_follower,
     bi_arx5,
     bi_dobot_nova5,
+    bi_dobot_nova5_dh,
     bi_flexiv_rizon4_rt,
+    dobot_nova5,
     flexiv_rizon4,
     flexiv_rizon4_rt,
     make_robot_from_config,
+    mock_robot,
     pylibfranka_research3,
     xense_flare as xense_flare_robot,
     xense_multisensor,
-    mock_robot,
-    dobot_nova5,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -234,19 +247,18 @@ from lerobot.teleoperators import (  # noqa: F401
     pico4,
     pico4_hand,
     spacemouse,
+    trlc_leader,
     vive_tracker,
     xense_flare,
-    trlc_leader,
 )
 from lerobot.utils.robot_utils import (
+    busy_wait,
     get_logger,
     precise_sleep,
     rotation_6d_to_quaternion,
-    busy_wait,
 )
 from lerobot.utils.utils import move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
-
 
 logger = get_logger("Teleoperate")
 
@@ -2378,11 +2390,57 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop = make_teleoperator_from_config(cfg.teleop)
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
+
             from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
                 ControlMode as BiDobotNova5ControlMode,
             )
 
             if robot.config.control_mode != BiDobotNova5ControlMode.CARTESIAN_MOTION:
+                raise ValueError(
+                    f"BiPico4 teleoperation requires CARTESIAN_MOTION mode, "
+                    f"but robot is configured with {robot.config.control_mode}"
+                )
+
+            try:
+                with _TPE(max_workers=2) as _ex:
+                    _robot_fut = _ex.submit(robot.connect, go_to_start=True)
+                    _teleop_fut = _ex.submit(teleop.pre_init)
+                    _teleop_fut.result()
+                    _robot_fut.result()
+            except KeyboardInterrupt:
+                logger.info("Startup interrupted by user")
+                raise
+
+            left_pose, right_pose = robot.get_current_tcp_pose_quat()
+            logger.info(f"Left start pose:  {left_pose}")
+            logger.info(f"Right start pose: {right_pose}")
+            teleop.connect(left_tcp_pose_quat=left_pose, right_tcp_pose_quat=right_pose)
+            try:
+                bi_pico4_teleop_loop(
+                    teleop=teleop,
+                    robot=robot,
+                    fps=cfg.fps,
+                    display_data=cfg.display_data,
+                    duration=cfg.teleop_time_s,
+                    dryrun=cfg.dryrun,
+                    debug_timing=cfg.debug_timing,
+                )
+            except KeyboardInterrupt:
+                logger.info("Teleoperation interrupted by user")
+
+        # --- bi_dobot_nova5_dh + bi_pico4 ---
+        elif cfg.robot.type == "bi_dobot_nova5_dh" and cfg.teleop.type == "bi_pico4":
+            logger.info("Detected BiDobotNova5DH + BiPico4")
+            robot = make_robot_from_config(cfg.robot)
+            teleop = make_teleoperator_from_config(cfg.teleop)
+
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+
+            from lerobot.robots.bi_dobot_nova5_dh.config_bi_dobot_nova5_dh import (
+                ControlMode as BiDobotNova5DHControlMode,
+            )
+
+            if robot.config.control_mode != BiDobotNova5DHControlMode.CARTESIAN_MOTION:
                 raise ValueError(
                     f"BiPico4 teleoperation requires CARTESIAN_MOTION mode, "
                     f"but robot is configured with {robot.config.control_mode}"

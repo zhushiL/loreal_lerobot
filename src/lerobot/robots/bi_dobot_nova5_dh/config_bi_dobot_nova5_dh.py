@@ -53,10 +53,10 @@ class BiDobotNova5DHConfig(RobotConfig):
     """
 
     # Robot identification
-    left_robot_ip: str = "192.168.5.101"
+    left_robot_ip: str = "192.168.142.101"
     left_dashboardPort: int = 29999
     left_feedPortFour: int = 30004
-    right_robot_ip: str = "192.168.5.102"
+    right_robot_ip: str = "192.168.142.102"
     right_dashboardPort: int = 29999
     right_feedPortFour: int = 30004
 
@@ -92,7 +92,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     # ======================== DH Gripper (end-effector) settings ==========
     # Whether to use the DH Robotics AG-95 gripper on each arm.
     # Grippers communicate via the arm's built-in RS485 end-effector port (Modbus RTU).
-    use_left_gripper: bool = False
+    use_left_gripper: bool = True
     use_right_gripper: bool = True
 
     # Left gripper Modbus RTU configuration
@@ -102,8 +102,11 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     left_dh_gripper_slave_id: int = 1
     left_dh_gripper_baudrate: int = 115200
-    left_dh_gripper_force: int = 30  # 20-100 %
+    left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
+    left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
+    left_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    left_dh_gripper_command_epsilon: float = 0.0
 
     # Right gripper Modbus RTU configuration
     right_master_ip: str = "192.168.201.1"
@@ -111,8 +114,11 @@ class BiDobotNova5DHConfig(RobotConfig):
     right_tool_identify: int = 1
     right_dh_gripper_slave_id: int = 1
     right_dh_gripper_baudrate: int = 115200
-    right_dh_gripper_force: int = 30  # 20-100 %
+    right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
+    right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
+    right_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
     left_dh_gripper: DHGripperIntegratedConfig | None = field(default=None, init=False)
@@ -197,6 +203,9 @@ class BiDobotNova5DHConfig(RobotConfig):
                 baudrate=self.left_dh_gripper_baudrate,
                 gripper_force=self.left_dh_gripper_force,
                 init_open=self.left_dh_gripper_init_open,
+                worker_frequency=self.left_dh_gripper_worker_frequency,
+                position_poll_frequency=self.left_dh_gripper_position_poll_frequency,
+                command_epsilon=self.left_dh_gripper_command_epsilon,
             )
             if self.enable_tactile_sensors:
                 self.cameras.update(
@@ -224,6 +233,9 @@ class BiDobotNova5DHConfig(RobotConfig):
                 baudrate=self.right_dh_gripper_baudrate,
                 gripper_force=self.right_dh_gripper_force,
                 init_open=self.right_dh_gripper_init_open,
+                worker_frequency=self.right_dh_gripper_worker_frequency,
+                position_poll_frequency=self.right_dh_gripper_position_poll_frequency,
+                command_epsilon=self.right_dh_gripper_command_epsilon,
             )
             if self.enable_tactile_sensors:
                 self.cameras.update(

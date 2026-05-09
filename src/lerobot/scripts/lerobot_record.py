@@ -414,8 +414,7 @@ def _start_reset_in_background(robot, teleop, set_done):
         try:
             robot.reset_to_initial_position()
             logger.info("✅ reset_to_initial_position completed")
-            tcp = robot.get_current_tcp_pose_quat()
-            teleop.reset_to_pose(tcp[:7], tcp[7])
+            _sync_rt_teleop_to_robot_pose(robot, teleop)
         except Exception as e:
             logger.error(f"Error during reset_to_initial_position: {e}")
         finally:
@@ -1104,6 +1103,140 @@ def pylibfranka_research3_record_loop(
 
 
 @safe_stop_image_writer
+def bi_dobot_nova5_dh_record_loop(
+    robot: Robot,
+    events: dict,
+    fps: int,
+    teleop_action_processor: RobotProcessorPipeline[
+        tuple[RobotAction, RobotObservation], RobotAction
+    ],
+    robot_action_processor: RobotProcessorPipeline[
+        tuple[RobotAction, RobotObservation], RobotAction
+    ],
+    robot_observation_processor: RobotProcessorPipeline[
+        RobotObservation, RobotObservation
+    ],
+    dataset: LeRobotDataset | None = None,
+    teleop: Teleoperator | list[Teleoperator] | None = None,
+    policy: PreTrainedPolicy | None = None,
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None,
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None,
+    control_time_s: int | None = None,
+    single_task: str | None = None,
+    display_data: bool = False,
+):
+    if dataset is not None and dataset.fps != fps:
+        raise ValueError(
+            f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps})."
+        )
+
+    if isinstance(teleop, list):
+        raise ValueError("Multi-teleop mode is not supported in this version.")
+
+    if policy is not None or preprocessor is not None or postprocessor is not None:
+        raise ValueError(
+            "BiDobot Nova5 DH passthrough record mode is teleop-only. "
+            "Do not provide policy or processor overrides."
+        )
+
+    timestamp = 0
+    start_episode_t = time.perf_counter()
+    is_resetting = False
+    prev_observation_frame = None
+
+    while timestamp < control_time_s:
+        start_loop_t = time.perf_counter()
+        reset_triggered = False
+        refresh_listener_events(events)
+
+        if events["stop_recording"]:
+            logger.info("Stop recording requested, exiting record loop early")
+            break
+
+        if events["rerecord_episode"]:
+            logger.info("Re-record episode requested, exiting record loop early")
+            break
+
+        if events["exit_early"]:
+            events["exit_early"] = False
+            break
+
+        if events["go_start"] and isinstance(teleop, Teleoperator) and teleop.name == "bi_pico4":
+            events["go_start"] = False
+            if hasattr(robot, "reset_to_initial_position") and not is_resetting:
+                is_resetting = True
+                reset_triggered = True
+
+                def _clear_reset():
+                    nonlocal is_resetting
+                    is_resetting = False
+
+                _start_reset_in_background(robot, teleop, set_done=_clear_reset)
+
+        obs = robot.get_observation()
+        obs_processed = robot_observation_processor(obs)
+
+        if dataset is not None:
+            observation_frame = build_dataset_frame(
+                dataset.features, obs_processed, prefix=OBS_STR
+            )
+
+        if not isinstance(teleop, Teleoperator):
+            logger.info(
+                "No teleoperator provided, skipping action generation. "
+                "The robot won't be at its rest position at the start of the next episode."
+            )
+            _record_loop_sleep(
+                start_loop_t=start_loop_t,
+                fps=fps,
+                start_episode_t=start_episode_t,
+                robot=robot,
+            )
+            timestamp = time.perf_counter() - start_episode_t
+            continue
+
+        teleop_action = teleop.get_action()
+        if is_resetting or reset_triggered:
+            sent_action = {
+                k: obs[k]
+                for k in robot.action_features
+                if k in obs
+            }
+        else:
+            action_values = teleop_action_processor((teleop_action, obs))
+            robot_action_to_send = robot_action_processor((action_values, obs))
+            sent_action = robot.send_action(robot_action_to_send)
+
+        if dataset is not None:
+            if (is_resetting or reset_triggered) and prev_observation_frame is not None:
+                action_frame = build_dataset_frame(
+                    dataset.features, sent_action, prefix=ACTION
+                )
+                frame = {**prev_observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
+            elif not (is_resetting or reset_triggered):
+                action_frame = build_dataset_frame(
+                    dataset.features, sent_action, prefix=ACTION
+                )
+                frame = {**observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
+
+            prev_observation_frame = observation_frame
+
+        if display_data:
+            log_rerun_data(observation=obs_processed, action=sent_action)
+
+        _record_loop_sleep(
+            start_loop_t=start_loop_t,
+            fps=fps,
+            start_episode_t=start_episode_t,
+            robot=robot,
+        )
+
+        timestamp = time.perf_counter() - start_episode_t
+
+
+@safe_stop_image_writer
 def record_loop(
     robot: Robot,
     events: dict,
@@ -1214,19 +1347,6 @@ def record_loop(
         else:
             action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
-
-        if (
-            isinstance(teleop, Teleoperator)
-            and teleop.name == "bi_pico4"
-            and hasattr(teleop, "get_reset_button")
-            and teleop.get_reset_button()
-            and hasattr(robot, "reset_to_initial_position")
-        ):
-            logger.info("BiPico4 reset requested (A button).")
-            robot.reset_to_initial_position()
-            _sync_rt_teleop_to_robot_pose(robot, teleop)
-            timestamp = time.perf_counter() - start_episode_t
-            continue
 
         if (
             events["go_start"]
@@ -1673,6 +1793,23 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
                     )
+                elif cfg.robot.type == "bi_dobot_nova5_dh":
+                    bi_dobot_nova5_dh_record_loop(
+                        robot=robot,
+                        events=events,
+                        fps=cfg.dataset.fps,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                        teleop=teleop,
+                        policy=policy,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        dataset=dataset,
+                        control_time_s=cfg.dataset.episode_time_s,
+                        single_task=cfg.dataset.single_task,
+                        display_data=cfg.display_data,
+                    )
                 elif cfg.robot.type == "pylibfranka_research3":
                     pylibfranka_research3_record_loop(
                         robot=robot,
@@ -1762,6 +1899,19 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                             robot=robot,
                             events=events,
                             fps=cfg.dataset.fps,
+                            teleop=teleop,
+                            control_time_s=cfg.dataset.reset_time_s,
+                            single_task=cfg.dataset.single_task,
+                            display_data=cfg.display_data,
+                        )
+                    elif cfg.robot.type == "bi_dobot_nova5_dh":
+                        bi_dobot_nova5_dh_record_loop(
+                            robot=robot,
+                            events=events,
+                            fps=cfg.dataset.fps,
+                            teleop_action_processor=teleop_action_processor,
+                            robot_action_processor=robot_action_processor,
+                            robot_observation_processor=robot_observation_processor,
                             teleop=teleop,
                             control_time_s=cfg.dataset.reset_time_s,
                             single_task=cfg.dataset.single_task,

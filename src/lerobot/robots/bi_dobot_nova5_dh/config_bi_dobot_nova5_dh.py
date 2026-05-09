@@ -136,29 +136,31 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        # self.cameras = {
-        #     "head": RealSenseCameraConfig(
-        #             serial_number_or_name="230322271365",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        #         "left_wrist": RealSenseCameraConfig(
-        #             serial_number_or_name="230422271416",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        #         "right_wrist": RealSenseCameraConfig(
-        #             serial_number_or_name="230322274234",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        # }
+        from lerobot.cameras.realsense import RealSenseCameraConfig
+
+        self.cameras = {
+            "head": RealSenseCameraConfig(
+                serial_number_or_name="254622078230",
+                fps=30,
+                width=1280,
+                height=720,
+                warmup_s=1.0,
+            ),
+            "left_wrist": RealSenseCameraConfig(
+                serial_number_or_name="352122272611",
+                fps=30,
+                width=640,
+                height=480,
+                warmup_s=1.0,
+            ),
+            #         "right_wrist": RealSenseCameraConfig(
+            #             serial_number_or_name="230322274234",
+            #             fps=30,
+            #             width=640,
+            #             height=480,
+            #             warmup_s=1.0,
+            #         ),
+        }
 
         # Validate control frequency (NRT mode: 1-100 Hz)
         if not 1 <= self.control_frequency <= 100:

@@ -587,7 +587,7 @@ lerobot-teleoperate \
     --robot.type=bi_dobot_nova5_dh \
     --teleop.type=bi_pico4 \
     --fps=30 \
-    --display_data=true \
+    --display_data=false \
     --debug_timing=false \
     --dryrun=false
 ```
@@ -598,7 +598,7 @@ lerobot-teleoperate \
 lerobot-record \
     --robot.type=bi_dobot_nova5_dh \
     --teleop.type=bi_pico4 \
-    --dataset.repo_id=Vertax/bi_dobot_nova5_dh_pico4_test \
+    --dataset.repo_id=Xense/bi_dobot_nova5_dh_pico4_test \
     --dataset.num_episodes=10 \
     --dataset.single_task="teleoperate the bi-dobot nova5 dh grippers with pico4" \
     --dataset.fps=30 \
@@ -608,7 +608,7 @@ lerobot-record \
     --dataset.vcodec=auto \
     --resume=false \
     --dataset.push_to_hub=false \
-    --display_data=true
+    --display_data=false
 ```
 
 If only the right DH gripper is mounted, set:

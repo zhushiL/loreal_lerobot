@@ -580,6 +580,43 @@ Other record-control shortcuts are currently keyboard-driven:
 | `Esc` | Stop the recording session |
 | `Space` | Reset both arms to start pose (recording continues) |
 
+## BiDobot Nova5 DH + Bi-Pico4 lerobot-teleoperate command
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --fps=30 \
+    --display_data=false \
+    --debug_timing=false \
+    --dryrun=false
+```
+
+## BiDobot Nova5 DH + Bi-Pico4 lerobot-record command
+
+```bash
+lerobot-record \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --dataset.repo_id=Xense/bi_dobot_nova5_dh_pico4_test \
+    --dataset.num_episodes=10 \
+    --dataset.single_task="teleoperate the bi-dobot nova5 dh grippers with pico4" \
+    --dataset.fps=30 \
+    --dataset.episode_time_s=60 \
+    --dataset.reset_time_s=20 \
+    --dataset.streaming_encoding=true \
+    --dataset.vcodec=auto \
+    --resume=false \
+    --dataset.push_to_hub=false \
+    --display_data=false
+```
+
+If only the right DH gripper is mounted, set:
+
+```bash
+--robot.use_left_gripper=false --robot.use_right_gripper=true
+```
+
 ## ARX5 Robot lerobot-record command (use trlc_leader teleop)
 
 ```bash

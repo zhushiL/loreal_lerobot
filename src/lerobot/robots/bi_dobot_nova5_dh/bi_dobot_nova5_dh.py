@@ -29,6 +29,7 @@ Observation keys follow the same naming convention.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import threading
 import time
@@ -38,15 +39,6 @@ from typing import Any
 import numpy as np
 
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5 import (
-    BiDobotNova5Config,
-    ControlMode,
-)
-from lerobot.robots.bi_dobot_nova5.TCP_IP_Python_V4.dobot_api import (
-    DobotApiDashboard,
-    DobotApiFeedBack,
-)
-from lerobot.robots.dh_gripper import DHGripper
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import (
@@ -57,8 +49,83 @@ from lerobot.utils.robot_utils import (
     rotation_6d_to_quaternion,
 )
 
+from .config_bi_dobot_nova5_dh import BiDobotNova5DHConfig, ControlMode
+from .dh_gripper_integrated import DHGripperIntegrated
+from .TCP_IP_Python_V4.dobot_api import DobotApiDashboard, DobotApiFeedBack
+
 JOINT_DOF = 6
 MM_PER_METER = 1000.0
+
+_MODBUS_RETRIES = 3
+
+
+class _DobotModbusRTU:
+    """Thin adapter that exposes a ModbusRTUProtocol interface over DobotApiDashboard.
+
+    Calls ModbusCreate(..., isRTU=True) on construction to establish the RS485
+    Modbus master, then forwards read_register / write_register calls through
+    GetHoldRegs / SetHoldRegs. ModbusClose is issued in close().
+
+    This class lives here (not in a separate module) because it is tightly coupled to
+    DobotApiDashboard and only makes sense in the context of BiDobotNova5.
+    """
+
+    def __init__(
+        self,
+        robot: DobotApiDashboard,
+        master_ip: str,
+        master_port: int,
+        slave_id: int,
+        is_rtu: bool = True,
+    ) -> None:
+        self._robot = robot
+        resp = self._robot.ModbusCreate(master_ip, master_port, slave_id, is_rtu)
+        error_id, values = self._parse(resp)
+        if error_id != 0 or not values:
+            raise RuntimeError(
+                f"ModbusCreate failed (error_id={error_id}): {resp.strip()}"
+            )
+        self._index: int = int(values[0])
+
+    # ── ModbusRTUProtocol implementation ──────────────────────────────────────
+
+    def read_register(self, reg: int) -> int | None:
+        for _ in range(_MODBUS_RETRIES):
+            try:
+                resp = self._robot.GetHoldRegs(self._index, reg, 1)
+                error_id, values = self._parse(resp)
+                if error_id == 0 and values:
+                    return int(values[0])
+            except Exception:
+                pass
+        return None
+
+    def write_register(self, reg: int, value: int) -> bool:
+        val_str = "{" + str(value) + "}"
+        for _ in range(_MODBUS_RETRIES):
+            try:
+                resp = self._robot.SetHoldRegs(self._index, reg, 1, val_str)
+                error_id, _ = self._parse(resp)
+                if error_id == 0:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self._robot.ModbusClose(self._index)
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse(resp: str) -> tuple[int, list[str]]:
+        match = re.match(r"\s*(-?\d+)\s*,\s*\{([^}]*)\}", resp)
+        if match is None:
+            raise RuntimeError(f"Unexpected Dobot response: {resp!r}")
+        error_id = int(match.group(1))
+        values = [v.strip() for v in match.group(2).split(",") if v.strip()]
+        return error_id, values
 
 
 class _FeedState:
@@ -72,14 +139,14 @@ class _FeedState:
         self.qActual = [0.0] * JOINT_DOF
 
 
-class BiDobotNova5(Robot):
-    config_class = BiDobotNova5Config
-    name = "bi_dobot_nova5"
+class BiDobotNova5DH(Robot):
+    config_class = BiDobotNova5DHConfig
+    name = "bi_dobot_nova5_dh"
 
-    def __init__(self, config: BiDobotNova5Config):
+    def __init__(self, config: BiDobotNova5DHConfig):
         super().__init__(config)
         self.config = config
-        self.logger = get_logger("BiDobotNova5")
+        self.logger = get_logger("BiDobotNova5DH")
 
         self._left_robot: DobotApiDashboard | None = None
         self._right_robot: DobotApiDashboard | None = None
@@ -97,13 +164,17 @@ class BiDobotNova5(Robot):
         self._is_connected = False
         self.rt_moving = False  # for teleop loop compatibility
 
-        self._left_gripper: DHGripper | None = None
+        self._left_gripper: DHGripperIntegrated | None = None
         if config.use_left_gripper:
-            self._left_gripper = DHGripper(config.left_dh_gripper)
+            self._left_gripper = DHGripperIntegrated(
+                config.left_dh_gripper, name="left"
+            )
 
-        self._right_gripper: DHGripper | None = None
+        self._right_gripper: DHGripperIntegrated | None = None
         if config.use_right_gripper:
-            self._right_gripper = DHGripper(config.right_dh_gripper)
+            self._right_gripper = DHGripperIntegrated(
+                config.right_dh_gripper, name="right"
+            )
         self._left_gripper_connected = False
         self._right_gripper_connected = False
 
@@ -543,9 +614,30 @@ class BiDobotNova5(Robot):
                 time.sleep(0.1)
 
             if self._left_gripper and self.config.use_left_gripper:
-                self.logger.info("Connecting left DH Gripper...")
+                self.logger.info("Connecting left DH Gripper via robot RS485...")
                 try:
-                    self._left_gripper.connect()
+                    self._raise_if_dobot_error(
+                        self._left_robot,
+                        self._left_robot.SetToolMode(1, 1, self.config.left_tool_identify),
+                        "left SetToolMode",
+                    )
+                    self._raise_if_dobot_error(
+                        self._left_robot,
+                        self._left_robot.SetTool485(
+                            self.config.left_dh_gripper_baudrate,
+                            "N",
+                            1,
+                            self.config.left_tool_identify,
+                        ),
+                        "left SetTool485",
+                    )
+                    left_modbus = _DobotModbusRTU(
+                        self._left_robot,
+                        self.config.left_master_ip,
+                        self.config.left_master_port,
+                        self.config.left_dh_gripper.slave_id,
+                    )
+                    self._left_gripper.connect(left_modbus)
                     self._left_gripper_connected = True
                 except Exception as e:
                     self._left_gripper_connected = False
@@ -553,9 +645,30 @@ class BiDobotNova5(Robot):
                         f"Failed to connect left DH Gripper, continuing without left gripper control: {e}"
                     )
             if self._right_gripper and self.config.use_right_gripper:
-                self.logger.info("Connecting right DH Gripper...")
+                self.logger.info("Connecting right DH Gripper via robot RS485...")
                 try:
-                    self._right_gripper.connect()
+                    self._raise_if_dobot_error(
+                        self._right_robot,
+                        self._right_robot.SetToolMode(1, 1, self.config.right_tool_identify),
+                        "right SetToolMode",
+                    )
+                    self._raise_if_dobot_error(
+                        self._right_robot,
+                        self._right_robot.SetTool485(
+                            self.config.right_dh_gripper_baudrate,
+                            "N",
+                            1,
+                            self.config.right_tool_identify,
+                        ),
+                        "right SetTool485",
+                    )
+                    right_modbus = _DobotModbusRTU(
+                        self._right_robot,
+                        self.config.right_master_ip,
+                        self.config.right_master_port,
+                        self.config.right_dh_gripper.slave_id,
+                    )
+                    self._right_gripper.connect(right_modbus)
                     self._right_gripper_connected = True
                 except Exception as e:
                     self._right_gripper_connected = False
@@ -921,17 +1034,8 @@ class BiDobotNova5(Robot):
             except Exception as e:
                 self.logger.warn(f"Failed to move to home before disconnect: {e}")
 
-            if self._left_robot is not None:
-                self._left_robot.Stop()
-                self._left_robot.close()
-            if self._right_robot is not None:
-                self._right_robot.Stop()
-                self._right_robot.close()
-            if self._left_feed is not None:
-                self._left_feed.close()
-            if self._right_feed is not None:
-                self._right_feed.close()
-
+            # Disconnect grippers first — they need the robot TCP to send
+            # ModbusClose and the open-gripper position command.
             if (
                 self._left_gripper
                 and self.config.use_left_gripper
@@ -944,6 +1048,17 @@ class BiDobotNova5(Robot):
                 and self._right_gripper_connected
             ):
                 self._right_gripper.disconnect()
+
+            if self._left_robot is not None:
+                self._left_robot.Stop()
+                self._left_robot.close()
+            if self._right_robot is not None:
+                self._right_robot.Stop()
+                self._right_robot.close()
+            if self._left_feed is not None:
+                self._left_feed.close()
+            if self._right_feed is not None:
+                self._right_feed.close()
 
             for cam in self.cameras.values():
                 cam.disconnect()

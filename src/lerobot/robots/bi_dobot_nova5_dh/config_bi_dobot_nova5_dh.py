@@ -22,7 +22,8 @@ from enum import Enum
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.xense import XenseOutputType, XenseTactileCameraConfig
 from lerobot.robots.config import RobotConfig
-from lerobot.robots.dh_gripper import DHGripperConfig  # noqa: F401
+
+from .config_dh_gripper_integrated import DHGripperIntegratedConfig  # noqa: F401
 
 
 class ControlMode(str, Enum):
@@ -43,19 +44,19 @@ class ControlMode(str, Enum):
     CARTESIAN_MOTION = "cartesian_motion_control"
 
 
-@RobotConfig.register_subclass("bi_dobot_nova5")
+@RobotConfig.register_subclass("bi_dobot_nova5_dh")
 @dataclass
-class BiDobotNova5Config(RobotConfig):
+class BiDobotNova5DHConfig(RobotConfig):
     """Configuration for BiDobot Nova5 robot.
 
     The BiDobot Nova5 is a bimanual system with two 6-DOF collaborative robots.
     """
 
     # Robot identification
-    left_robot_ip: str = "192.168.5.101"
+    left_robot_ip: str = "192.168.142.101"
     left_dashboardPort: int = 29999
     left_feedPortFour: int = 30004
-    right_robot_ip: str = "192.168.5.102"
+    right_robot_ip: str = "192.168.142.102"
     right_dashboardPort: int = 29999
     right_feedPortFour: int = 30004
 
@@ -89,27 +90,39 @@ class BiDobotNova5Config(RobotConfig):
     start_vel_scale: int = 30
 
     # ======================== DH Gripper (end-effector) settings ==========
-    # Whether to use the DH Robotics AG-95 gripper on each arm
-    use_left_gripper: bool = False
+    # Whether to use the DH Robotics AG-95 gripper on each arm.
+    # Grippers communicate via the arm's built-in RS485 end-effector port (Modbus RTU).
+    use_left_gripper: bool = True
     use_right_gripper: bool = True
 
-    # Left gripper serial port configuration
-    left_dh_gripper_port: str = "/dev/ttyDHLeft"
+    # Left gripper Modbus RTU configuration
+    left_master_ip: str = "192.168.201.1"
+    left_master_port: int = 60000
+    left_tool_identify: int = 1
+
     left_dh_gripper_slave_id: int = 1
     left_dh_gripper_baudrate: int = 115200
-    left_dh_gripper_force: int = 30  # 20-100 %
+    left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
+    left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
+    left_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    left_dh_gripper_command_epsilon: float = 0.0
 
-    # Right gripper serial port configuration
-    right_dh_gripper_port: str = "/dev/ttyDHRight"
+    # Right gripper Modbus RTU configuration
+    right_master_ip: str = "192.168.201.1"
+    right_master_port: int = 60000
+    right_tool_identify: int = 1
     right_dh_gripper_slave_id: int = 1
     right_dh_gripper_baudrate: int = 115200
-    right_dh_gripper_force: int = 30  # 20-100 %
+    right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
+    right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
+    right_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
-    left_dh_gripper: DHGripperConfig | None = field(default=None, init=False)
-    right_dh_gripper: DHGripperConfig | None = field(default=None, init=False)
+    left_dh_gripper: DHGripperIntegratedConfig | None = field(default=None, init=False)
+    right_dh_gripper: DHGripperIntegratedConfig | None = field(default=None, init=False)
 
     # ======================== Tactile Sensor Configuration ========================
     # Set enable_tactile_sensors=True to include XenseTactileCameraConfig entries in cameras.
@@ -123,29 +136,31 @@ class BiDobotNova5Config(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        # self.cameras = {
-        #     "head": RealSenseCameraConfig(
-        #             serial_number_or_name="230322271365",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        #         "left_wrist": RealSenseCameraConfig(
-        #             serial_number_or_name="230422271416",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        #         "right_wrist": RealSenseCameraConfig(
-        #             serial_number_or_name="230322274234",
-        #             fps=30,
-        #             width=640,
-        #             height=480,
-        #             warmup_s=1.0,
-        #         ),
-        # }
+        from lerobot.cameras.realsense import RealSenseCameraConfig
+
+        self.cameras = {
+            "head": RealSenseCameraConfig(
+                serial_number_or_name="254622078230",
+                fps=30,
+                width=1280,
+                height=720,
+                warmup_s=1.0,
+            ),
+            "left_wrist": RealSenseCameraConfig(
+                serial_number_or_name="352122272611",
+                fps=30,
+                width=640,
+                height=480,
+                warmup_s=1.0,
+            ),
+            #         "right_wrist": RealSenseCameraConfig(
+            #             serial_number_or_name="230322274234",
+            #             fps=30,
+            #             width=640,
+            #             height=480,
+            #             warmup_s=1.0,
+            #         ),
+        }
 
         # Validate control frequency (NRT mode: 1-100 Hz)
         if not 1 <= self.control_frequency <= 100:
@@ -174,15 +189,25 @@ class BiDobotNova5Config(RobotConfig):
             raise ValueError(
                 f"start_vel_scale must be between 1 and 100, got {self.start_vel_scale}"
             )
+        if self.left_tool_identify not in (1, 2):
+            raise ValueError(
+                f"left_tool_identify must be 1 or 2, got {self.left_tool_identify}"
+            )
+        if self.right_tool_identify not in (1, 2):
+            raise ValueError(
+                f"right_tool_identify must be 1 or 2, got {self.right_tool_identify}"
+            )
 
-        # Create DHGripperConfig from exposed parameters (only if use_*_gripper=True)
+        # Create DHGripperIntegratedConfig from exposed parameters (only if use_*_gripper=True)
         if self.use_left_gripper:
-            self.left_dh_gripper = DHGripperConfig(
-                port=self.left_dh_gripper_port,
+            self.left_dh_gripper = DHGripperIntegratedConfig(
                 slave_id=self.left_dh_gripper_slave_id,
                 baudrate=self.left_dh_gripper_baudrate,
                 gripper_force=self.left_dh_gripper_force,
                 init_open=self.left_dh_gripper_init_open,
+                worker_frequency=self.left_dh_gripper_worker_frequency,
+                position_poll_frequency=self.left_dh_gripper_position_poll_frequency,
+                command_epsilon=self.left_dh_gripper_command_epsilon,
             )
             if self.enable_tactile_sensors:
                 self.cameras.update(
@@ -205,12 +230,14 @@ class BiDobotNova5Config(RobotConfig):
             self.left_dh_gripper = None
 
         if self.use_right_gripper:
-            self.right_dh_gripper = DHGripperConfig(
-                port=self.right_dh_gripper_port,
+            self.right_dh_gripper = DHGripperIntegratedConfig(
                 slave_id=self.right_dh_gripper_slave_id,
                 baudrate=self.right_dh_gripper_baudrate,
                 gripper_force=self.right_dh_gripper_force,
                 init_open=self.right_dh_gripper_init_open,
+                worker_frequency=self.right_dh_gripper_worker_frequency,
+                position_poll_frequency=self.right_dh_gripper_position_poll_frequency,
+                command_epsilon=self.right_dh_gripper_command_epsilon,
             )
             if self.enable_tactile_sensors:
                 self.cameras.update(

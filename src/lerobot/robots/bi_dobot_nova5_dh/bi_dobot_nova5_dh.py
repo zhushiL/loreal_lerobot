@@ -135,6 +135,8 @@ class _FeedState:
         self.MessageSize = -1
         self.DigitalInputs = -1
         self.DigitalOutputs = -1
+        self.User = -1
+        self.Tool = -1
         self.tcpPose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # xyz(mm), rpy(deg)
         self.qActual = [0.0] * JOINT_DOF
 
@@ -307,6 +309,56 @@ class BiDobotNova5DH(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         self.logger.info(
             f"Configuring robot for {self.config.control_mode.value} mode..."
+        )
+        self._configure_tool_coordinates()
+
+    def _configure_tool_coordinates(self) -> None:
+        if self._left_robot is None or self._right_robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        left_tool = (
+            int(self.config.left_tool_coordinate_index)
+            if self.config.use_tool_coordinate
+            else 0
+        )
+        right_tool = (
+            int(self.config.right_tool_coordinate_index)
+            if self.config.use_tool_coordinate
+            else 0
+        )
+        self._set_tool_coordinate_one_arm(
+            self._left_robot, self._left_feed_data, "left", left_tool
+        )
+        self._set_tool_coordinate_one_arm(
+            self._right_robot, self._right_feed_data, "right", right_tool
+        )
+
+    def _set_tool_coordinate_one_arm(
+        self,
+        robot: DobotApiDashboard,
+        feed: _FeedState,
+        side: str,
+        tool_index: int,
+    ) -> None:
+        self._raise_if_dobot_error(robot, robot.Tool(tool_index), f"{side} Tool")
+        self._wait_for_feedback_tool_index(feed, side, tool_index)
+        self.logger.info(f"{side} global tool coordinate set to Tool({tool_index})")
+
+    def _wait_for_feedback_tool_index(
+        self,
+        feed: _FeedState,
+        side: str,
+        tool_index: int,
+        timeout_s: float = 1.0,
+    ) -> None:
+        start_time = time.time()
+        while time.time() - start_time <= timeout_s:
+            if int(feed.Tool) == int(tool_index):
+                return
+            time.sleep(0.02)
+        self.logger.warn(
+            f"{side} feedback Tool index did not update to {tool_index} within {timeout_s:.1f}s "
+            f"(current={feed.Tool}). Continuing with dashboard Tool({tool_index}) set."
         )
 
     def _parse_dobot_response(self, value_recv: str) -> tuple[int, list[str]]:
@@ -514,6 +566,8 @@ class BiDobotNova5DH(Robot):
                 feed_state.RobotMode = feed_info["RobotMode"][0]
                 feed_state.DigitalInputs = feed_info["DigitalInputs"][0]
                 feed_state.DigitalOutputs = feed_info["DigitalOutputs"][0]
+                feed_state.User = int(feed_info["User"][0])
+                feed_state.Tool = int(feed_info["Tool"][0])
                 feed_state.robotCurrentCommandID = feed_info["CurrentCommandId"][0]
                 feed_state.tcpPose = feed_info["ToolVectorActual"][0]
                 feed_state.qActual = feed_info["QActual"][0]
@@ -898,6 +952,25 @@ class BiDobotNova5DH(Robot):
         )
         self._raise_if_dobot_error(robot, response, f"{side} ServoJ")
 
+    def _clip_workspace_position(self, side: str, position_m: np.ndarray) -> np.ndarray:
+        if not self.config.enable_clip:
+            return position_m
+
+        if side == "left":
+            min_xyz = self.config.left_workspace_min_xyz_m
+            max_xyz = self.config.left_workspace_max_xyz_m
+        elif side == "right":
+            min_xyz = self.config.right_workspace_min_xyz_m
+            max_xyz = self.config.right_workspace_max_xyz_m
+        else:
+            raise ValueError(f"Unsupported arm side for workspace clipping: {side}")
+
+        return np.clip(
+            position_m,
+            np.asarray(min_xyz, dtype=np.float64),
+            np.asarray(max_xyz, dtype=np.float64),
+        )
+
     def _send_cart_action_one_arm(
         self,
         robot: DobotApiDashboard,
@@ -908,6 +981,9 @@ class BiDobotNova5DH(Robot):
         x_m = float(action[f"{prefix}_tcp.x"])
         y_m = float(action[f"{prefix}_tcp.y"])
         z_m = float(action[f"{prefix}_tcp.z"])
+        x_m, y_m, z_m = self._clip_workspace_position(
+            side, np.array([x_m, y_m, z_m], dtype=np.float64)
+        )
         x_mm = x_m * MM_PER_METER
         y_mm = y_m * MM_PER_METER
         z_mm = z_m * MM_PER_METER

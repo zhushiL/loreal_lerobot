@@ -53,10 +53,10 @@ class BiDobotNova5DHConfig(RobotConfig):
     """
 
     # Robot identification
-    left_robot_ip: str = "192.168.142.101"
+    left_robot_ip: str = "192.168.111.101"
     left_dashboardPort: int = 29999
     left_feedPortFour: int = 30004
-    right_robot_ip: str = "192.168.142.102"
+    right_robot_ip: str = "192.168.111.102"
     right_dashboardPort: int = 29999
     right_feedPortFour: int = 30004
 
@@ -71,6 +71,27 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
+
+    # Tool coordinate for Cartesian teleoperation. Tool 0 is the flange.
+    use_tool_coordinate: bool = True
+    left_tool_coordinate_index: int = 1
+    right_tool_coordinate_index: int = 1
+
+    # Cartesian safety workspace for teleoperation actions, in meters.
+    # Format: [x, y, z].
+    enable_clip: bool = True
+    left_workspace_min_xyz_m: list[float] = field(
+        default_factory=lambda: [-0.30, -0.46, -0.175]
+    )
+    left_workspace_max_xyz_m: list[float] = field(
+        default_factory=lambda: [0.70, 0.15, 0.50]
+    )
+    right_workspace_min_xyz_m: list[float] = field(
+        default_factory=lambda: [-0.30, -0.15, -0.167]
+    )
+    right_workspace_max_xyz_m: list[float] = field(
+        default_factory=lambda: [0.70, 0.46, 0.50]
+    )
 
     left_home_point_list: list[float] = field(
         default_factory=lambda: [-90, 0, -90, 0, 90, 0]
@@ -167,6 +188,22 @@ class BiDobotNova5DHConfig(RobotConfig):
             raise ValueError(
                 f"control_frequency must be between 1 and 100 Hz for NRT mode, got {self.control_frequency}"
             )
+        self._validate_tool_coordinate_index(
+            self.left_tool_coordinate_index, "left_tool_coordinate_index"
+        )
+        self._validate_tool_coordinate_index(
+            self.right_tool_coordinate_index, "right_tool_coordinate_index"
+        )
+        self._validate_workspace_min_max(
+            self.left_workspace_min_xyz_m,
+            self.left_workspace_max_xyz_m,
+            "left_workspace",
+        )
+        self._validate_workspace_min_max(
+            self.right_workspace_min_xyz_m,
+            self.right_workspace_max_xyz_m,
+            "right_workspace",
+        )
 
         # Validate start position parameters
         if len(self.left_start_position_degree) != 6:
@@ -258,3 +295,25 @@ class BiDobotNova5DHConfig(RobotConfig):
                 )
         else:
             self.right_dh_gripper = None
+
+    @staticmethod
+    def _validate_tool_coordinate_index(index: int, name: str) -> None:
+        if not 0 <= int(index) <= 9:
+            raise ValueError(f"{name} must be between 0 and 9, got {index}")
+
+    @staticmethod
+    def _validate_workspace_min_max(
+        min_xyz: list[float], max_xyz: list[float], name: str
+    ) -> None:
+        if len(min_xyz) != 3:
+            raise ValueError(f"{name}_min_xyz_m must have 3 elements, got {len(min_xyz)}")
+        if len(max_xyz) != 3:
+            raise ValueError(f"{name}_max_xyz_m must have 3 elements, got {len(max_xyz)}")
+        axis_names = ("x", "y", "z")
+        for axis_idx, axis_name in enumerate(axis_names):
+            lower = float(min_xyz[axis_idx])
+            upper = float(max_xyz[axis_idx])
+            if lower >= upper:
+                raise ValueError(
+                    f"{name} has invalid {axis_name} bounds: min {lower} >= max {upper}"
+                )

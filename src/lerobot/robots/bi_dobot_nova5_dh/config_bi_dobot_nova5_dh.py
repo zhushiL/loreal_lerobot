@@ -126,7 +126,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
     left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    left_dh_gripper_position_poll_frequency: float = 2.0  # Hz
+    left_dh_gripper_position_poll_frequency: float = 3.0  # Hz
     left_dh_gripper_command_epsilon: float = 0.0
 
     # Right gripper Modbus RTU configuration
@@ -138,7 +138,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
     right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    right_dh_gripper_position_poll_frequency: float = 2.0  # Hz
+    right_dh_gripper_position_poll_frequency: float = 3.0  # Hz
     right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)

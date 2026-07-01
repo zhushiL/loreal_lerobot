@@ -12,7 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .camera_xense import XenseTactileCamera
 from .configuration_xense import XenseTactileCameraConfig, XenseOutputType
 
 __all__ = ["XenseTactileCamera", "XenseTactileCameraConfig", "XenseOutputType"]
+
+
+def __getattr__(name):
+    if name == "XenseTactileCamera":
+        from .camera_xense import XenseTactileCamera
+
+        return XenseTactileCamera
+    raise AttributeError(f"module {__name__} has no attribute {name}")

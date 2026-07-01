@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from lerobot.cameras.configs import CameraConfig
-from lerobot.cameras.xense import XenseOutputType, XenseTactileCameraConfig
+from lerobot.cameras.xense.configuration_xense import XenseOutputType, XenseTactileCameraConfig
 from lerobot.robots.config import RobotConfig
 
 from .config_dh_gripper_integrated import DHGripperIntegratedConfig  # noqa: F401
@@ -126,7 +126,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
     left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    left_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    left_dh_gripper_position_poll_frequency: float = 2.0  # Hz
     left_dh_gripper_command_epsilon: float = 0.0
 
     # Right gripper Modbus RTU configuration
@@ -138,7 +138,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
     right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    right_dh_gripper_position_poll_frequency: float = 20.0  # Hz
+    right_dh_gripper_position_poll_frequency: float = 2.0  # Hz
     right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
@@ -157,7 +157,7 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        from lerobot.cameras.realsense import RealSenseCameraConfig
+        from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 
         self.cameras = {
             "head": RealSenseCameraConfig(

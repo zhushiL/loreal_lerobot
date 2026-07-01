@@ -209,6 +209,7 @@ lerobot-teleoperate \
 
 """
 
+import importlib
 import time
 import traceback
 from dataclasses import asdict, dataclass
@@ -219,44 +220,15 @@ import numpy as np
 import rerun as rr
 
 from lerobot.configs import parser
-from lerobot.robots import (  # noqa: F401
+from lerobot.robots import (
     Robot,
     RobotConfig,
-    arx5_follower,
-    bi_arx5,
-    bi_dobot_nova5,
-    bi_dobot_nova5_dh,
-    bi_flexiv_rizon4_rt,
-    dobot_nova5,
-    bi_xense_flare_grippers,
-    dobot_nova5,
-    flexiv_rizon4,
-    flexiv_rizon4_rt,
     make_robot_from_config,
-    mock_robot,
-    pylibfranka_research3,
-    xense_flare as xense_flare_robot,
-    xense_multisensor,
-    mock_robot,
-    dobot_nova5,
-    xense_multisensor,
 )
-from lerobot.teleoperators import (  # noqa: F401
+from lerobot.teleoperators import (
     Teleoperator,
     TeleoperatorConfig,
-    bi_pico4,
-    btgamepad,
-    gamepad,
     make_teleoperator_from_config,
-    mock_teleop,
-    pico4,
-    pico4_hand,
-    spacemouse,
-    trlc_leader,
-    vive_tracker,
-    xense_flare,
-    trlc_leader,
-    bi_trlc,
 )
 from lerobot.utils.robot_utils import (
     busy_wait,
@@ -268,6 +240,81 @@ from lerobot.utils.utils import move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 logger = get_logger("Teleoperate")
+
+_BUILTIN_CAMERA_CONFIG_MODULES = (
+    "lerobot.cameras.opencv.configuration_opencv",
+    "lerobot.cameras.realsense.configuration_realsense",
+    "lerobot.cameras.xense.configuration_xense",
+)
+
+_BUILTIN_ROBOT_CONFIG_MODULES = {
+    "arx5_follower": "lerobot.robots.arx5_follower.config_arx5_follower",
+    "bi_arx5": "lerobot.robots.bi_arx5.config_bi_arx5",
+    "bi_dobot_nova5": "lerobot.robots.bi_dobot_nova5.config_bi_dobot_nova5",
+    "bi_dobot_nova5_dh": "lerobot.robots.bi_dobot_nova5_dh.config_bi_dobot_nova5_dh",
+    "bi_flexiv_rizon4_rt": "lerobot.robots.bi_flexiv_rizon4_rt.config_bi_flexiv_rizon4_rt",
+    "bi_xense_flare_grippers": "lerobot.robots.bi_xense_flare_grippers.config_bi_xense_flare_grippers",
+    "dobot_nova5": "lerobot.robots.dobot_nova5.config_dobot_nova5",
+    "flexiv_rizon4": "lerobot.robots.flexiv_rizon4.config_flexiv_rizon4",
+    "flexiv_rizon4_rt": "lerobot.robots.flexiv_rizon4_rt.config_flexiv_rizon4_rt",
+    "mock_robot": "lerobot.robots.mock_robot",
+    "pylibfranka_research3": "lerobot.robots.pylibfranka_research3.config_pylibfranka_research3",
+    "xense_flare": "lerobot.robots.xense_flare.config_xense_flare",
+    "xense_multisensor": "lerobot.robots.xense_multisensor.config_xense_multisensor",
+}
+
+_BUILTIN_TELEOP_CONFIG_MODULES = {
+    "bi_pico4": "lerobot.teleoperators.bi_pico4.config_bi_pico4",
+    "bi_trlc": "lerobot.teleoperators.bi_trlc.configuration_bi_trlc",
+    "btgamepad": "lerobot.teleoperators.btgamepad.configuration_btgamepad",
+    "gamepad": "lerobot.teleoperators.gamepad.configuration_gamepad",
+    "keyboard": "lerobot.teleoperators.keyboard.configuration_keyboard",
+    "keyboard_ee": "lerobot.teleoperators.keyboard.configuration_keyboard",
+    "mock_teleop": "lerobot.teleoperators.mock_teleop",
+    "phone": "lerobot.teleoperators.phone.config_phone",
+    "pico4": "lerobot.teleoperators.pico4.config_pico4",
+    "pico4_hand": "lerobot.teleoperators.pico4_hand.config_pico4_hand",
+    "spacemouse": "lerobot.teleoperators.spacemouse.config_spacemouse",
+    "trlc_leader": "lerobot.teleoperators.trlc_leader.configuration_trlc_leader",
+    "vive_tracker": "lerobot.teleoperators.vive_tracker.config_vive_tracker",
+    "xense_flare": "lerobot.teleoperators.xense_flare.config_xense_flare_teleop",
+}
+
+
+def _register_config_modules(module_paths, required):
+    for module_path in dict.fromkeys(module_paths):
+        try:
+            importlib.import_module(module_path)
+        except Exception as e:
+            if module_path in required:
+                raise RuntimeError(
+                    f"Failed to register selected device config module {module_path}: {e}"
+                ) from e
+            logger.debug(f"Skipping optional device config module {module_path}: {e}")
+
+
+def _register_builtin_devices():
+    robot_type = parser.get_type_arg("robot")
+    teleop_type = parser.get_type_arg("teleop")
+
+    module_paths = list(_BUILTIN_CAMERA_CONFIG_MODULES)
+    required = set()
+
+    robot_module = _BUILTIN_ROBOT_CONFIG_MODULES.get(robot_type or "")
+    if robot_module is not None:
+        module_paths.append(robot_module)
+        required.add(robot_module)
+    elif robot_type is None:
+        module_paths.extend(_BUILTIN_ROBOT_CONFIG_MODULES.values())
+
+    teleop_module = _BUILTIN_TELEOP_CONFIG_MODULES.get(teleop_type or "")
+    if teleop_module is not None:
+        module_paths.append(teleop_module)
+        required.add(teleop_module)
+    elif teleop_type is None:
+        module_paths.extend(_BUILTIN_TELEOP_CONFIG_MODULES.values())
+
+    _register_config_modules(module_paths, required)
 
 
 def make_default_processors(*args, **kwargs):

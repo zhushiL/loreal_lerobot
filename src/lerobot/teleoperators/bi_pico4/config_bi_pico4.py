@@ -45,8 +45,8 @@ class BiPico4Config(TeleoperatorConfig):
 
     id: str = "bi_pico4"
 
-    pos_sensitivity: float = 1.0
-    ori_sensitivity: float = 1.0
+    pos_sensitivity: float = 1.5
+    ori_sensitivity: float = 0.5
     filter_window_size: int = 1
 
     left_gripper_width: float = 1.0

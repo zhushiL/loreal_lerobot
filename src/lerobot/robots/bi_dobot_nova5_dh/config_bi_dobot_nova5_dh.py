@@ -15,7 +15,6 @@
 # limitations under the License.
 
 """Configuration for BiDobot Nova5 robot."""
-"""Configuration for BiDobot Nova5 robot."""
 from dataclasses import dataclass, field
 from enum import Enum
 

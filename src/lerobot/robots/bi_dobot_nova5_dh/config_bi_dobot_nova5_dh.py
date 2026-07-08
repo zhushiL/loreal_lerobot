@@ -15,7 +15,6 @@
 # limitations under the License.
 
 """Configuration for BiDobot Nova5 robot."""
-
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -44,6 +43,21 @@ class ControlMode(str, Enum):
     CARTESIAN_MOTION = "cartesian_motion_control"
 
 
+class ResetMoveOrder(str, Enum):
+    LEFT_THEN_RIGHT = "left_then_right"
+    RIGHT_THEN_LEFT = "right_then_left"
+
+
+class ResetStrategy(str, Enum):
+    SEQUENTIAL_JOINT = "sequential_joint"
+    SYNC_Y_CLEARANCE_THEN_JOINT = "sync_y_clearance_then_joint"
+
+
+class ResetTarget(str, Enum):
+    HOME = "home"
+    START = "start"
+
+
 @RobotConfig.register_subclass("bi_dobot_nova5_dh")
 @dataclass
 class BiDobotNova5DHConfig(RobotConfig):
@@ -68,6 +82,12 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     # Connection behavior: if True, move to start positions after connect
     go_to_start: bool = True
+    reset_move_order: ResetMoveOrder = ResetMoveOrder.RIGHT_THEN_LEFT
+    reset_strategy: ResetStrategy = ResetStrategy.SYNC_Y_CLEARANCE_THEN_JOINT
+    reset_target: ResetTarget = ResetTarget.HOME
+    reset_y_clearance_m: float = 0.035
+    left_reset_y_clearance_sign: float = 1.0
+    right_reset_y_clearance_sign: float = -1.0
 
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
@@ -81,31 +101,31 @@ class BiDobotNova5DHConfig(RobotConfig):
     # Format: [x, y, z].
     enable_clip: bool = False
     left_workspace_min_xyz_m: list[float] = field(
-        default_factory=lambda: [-0.30, -0.46, -0.175]
+        default_factory=lambda: [-0.60, -0.49, -0.175]
     )
     left_workspace_max_xyz_m: list[float] = field(
-        default_factory=lambda: [0.70, 0.15, 0.50]
+        default_factory=lambda: [0.70, 0.15, 0.60]
     )
     right_workspace_min_xyz_m: list[float] = field(
-        default_factory=lambda: [-0.30, -0.15, -0.167]
+        default_factory=lambda: [-0.60, -0.15, -0.167]
     )
     right_workspace_max_xyz_m: list[float] = field(
-        default_factory=lambda: [0.70, 0.46, 0.50]
+        default_factory=lambda: [0.70, 0.49, 0.60]
     )
 
     left_home_point_list: list[float] = field(
-        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+        default_factory=lambda: [-45, 0, -90, 0, 90, 0]
     )
     right_home_point_list: list[float] = field(
-        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+        default_factory=lambda: [225, 0, 90, 0, -90, 0]
     )
 
     # Start position parameters (for MoveJ primitive)
     left_start_position_degree: list[float] = field(
-        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+        default_factory=lambda: [-45, 0, -90, 0, 90, 0]
     )
     right_start_position_degree: list[float] = field(
-        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+        default_factory=lambda: [225, 0, 90, 0, -90, 0]
     )
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30

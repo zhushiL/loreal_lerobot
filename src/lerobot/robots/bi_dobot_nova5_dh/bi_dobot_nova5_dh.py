@@ -49,7 +49,13 @@ from lerobot.utils.robot_utils import (
     rotation_6d_to_quaternion,
 )
 
-from .config_bi_dobot_nova5_dh import BiDobotNova5DHConfig, ControlMode
+from .config_bi_dobot_nova5_dh import (
+    BiDobotNova5DHConfig,
+    ControlMode,
+    ResetMoveOrder,
+    ResetStrategy,
+    ResetTarget,
+)
 from .dh_gripper_integrated import DHGripperIntegrated
 from .TCP_IP_Python_V4.dobot_api import DobotApiDashboard, DobotApiFeedBack
 
@@ -504,6 +510,206 @@ class BiDobotNova5DH(Robot):
                 )
         self._wait_for_joint_target(feed, robot, target, description, side)
 
+    def _send_joint_movj(
+        self,
+        robot: DobotApiDashboard,
+        joint_degrees: list[float],
+        description: str,
+        side: str,
+    ) -> int | None:
+        target = [float(value) for value in joint_degrees]
+        self._raise_if_dobot_error(
+            robot, robot.SpeedFactor(int(self.config.start_vel_scale)), "SpeedFactor"
+        )
+        response = robot.MovJ(
+            target[0],
+            target[1],
+            target[2],
+            target[3],
+            target[4],
+            target[5],
+            1,
+            v=int(self.config.start_vel_scale),
+        )
+        self.logger.info(
+            f"{side} {description} MovJ(joint) response: {response.strip()}"
+        )
+        values = self._raise_if_dobot_error(robot, response, "MovJ(joint)")
+        if not values:
+            return None
+        try:
+            return int(float(values[0]))
+        except (ValueError, TypeError):
+            self.logger.warn(
+                f"{side} {description} command id parse failed ({values}), "
+                "falling back to joint-error completion check."
+            )
+            return None
+
+    def _move_both_arms_joint_movj_sync(
+        self,
+        left_joint_degrees: list[float],
+        right_joint_degrees: list[float],
+        description: str,
+    ) -> None:
+        if self._left_robot is None or self._right_robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        left_command_id = self._send_joint_movj(
+            self._left_robot,
+            left_joint_degrees,
+            description,
+            "left",
+        )
+        right_command_id = self._send_joint_movj(
+            self._right_robot,
+            right_joint_degrees,
+            description,
+            "right",
+        )
+
+        if left_command_id is not None:
+            self._wait_for_command_id(
+                self._left_feed_data,
+                self._left_robot,
+                left_command_id,
+                description,
+                "left",
+            )
+        else:
+            self._wait_for_joint_target(
+                self._left_feed_data,
+                self._left_robot,
+                np.asarray(left_joint_degrees, dtype=np.float64),
+                description,
+                "left",
+            )
+
+        if right_command_id is not None:
+            self._wait_for_command_id(
+                self._right_feed_data,
+                self._right_robot,
+                right_command_id,
+                description,
+                "right",
+            )
+        else:
+            self._wait_for_joint_target(
+                self._right_feed_data,
+                self._right_robot,
+                np.asarray(right_joint_degrees, dtype=np.float64),
+                description,
+                "right",
+            )
+
+    def _move_both_arms_joint_movj(
+        self,
+        left_joint_degrees: list[float],
+        right_joint_degrees: list[float],
+        description: str,
+    ) -> None:
+        if self._left_robot is None or self._right_robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        move_specs = [
+            (self._left_robot, self._left_feed_data, left_joint_degrees, "left"),
+            (self._right_robot, self._right_feed_data, right_joint_degrees, "right"),
+        ]
+        if self.config.reset_move_order == ResetMoveOrder.RIGHT_THEN_LEFT:
+            move_specs.reverse()
+        elif self.config.reset_move_order != ResetMoveOrder.LEFT_THEN_RIGHT:
+            raise ValueError(f"Unsupported reset_move_order: {self.config.reset_move_order}")
+
+        for robot, feed, joint_degrees, side in move_specs:
+            self._move_joint_movj(robot, feed, joint_degrees, description, side)
+
+    def _move_pose_movj(
+        self,
+        robot: DobotApiDashboard,
+        pose: np.ndarray,
+        description: str,
+        side: str,
+    ) -> int | None:
+        pose_mm_deg = [float(value) for value in pose]
+        self._raise_if_dobot_error(
+            robot, robot.SpeedFactor(int(self.config.start_vel_scale)), "SpeedFactor"
+        )
+        response = robot.MovJ(
+            pose_mm_deg[0],
+            pose_mm_deg[1],
+            pose_mm_deg[2],
+            pose_mm_deg[3],
+            pose_mm_deg[4],
+            pose_mm_deg[5],
+            0,
+            v=int(self.config.start_vel_scale),
+        )
+        self.logger.info(
+            f"{side} {description} MovJ(pose) response: {response.strip()}"
+        )
+        values = self._raise_if_dobot_error(robot, response, "MovJ(pose)")
+        if not values:
+            return None
+        try:
+            return int(float(values[0]))
+        except (ValueError, TypeError):
+            self.logger.warn(
+                f"{side} {description} command id parse failed ({values}), "
+                "falling back to fixed wait."
+            )
+            return None
+
+    def _move_both_arms_y_clearance_sync(self) -> None:
+        if self._left_robot is None or self._right_robot is None:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        clearance_m = float(self.config.reset_y_clearance_m)
+        if clearance_m <= 0.0:
+            return
+
+        left_pose = np.asarray(self._left_feed_data.tcpPose, dtype=np.float64).copy()
+        right_pose = np.asarray(self._right_feed_data.tcpPose, dtype=np.float64).copy()
+        left_pose[1] += float(self.config.left_reset_y_clearance_sign) * clearance_m * MM_PER_METER
+        right_pose[1] += float(self.config.right_reset_y_clearance_sign) * clearance_m * MM_PER_METER
+
+        left_position_m = left_pose[:3] / MM_PER_METER
+        right_position_m = right_pose[:3] / MM_PER_METER
+        left_pose[:3] = self._clip_workspace_position("left", left_position_m) * MM_PER_METER
+        right_pose[:3] = self._clip_workspace_position("right", right_position_m) * MM_PER_METER
+
+        self.logger.info(
+            f"Moving both arms to Y-clearance poses: left_y={left_pose[1] / MM_PER_METER:.3f}m, "
+            f"right_y={right_pose[1] / MM_PER_METER:.3f}m"
+        )
+        left_command_id = self._move_pose_movj(
+            self._left_robot, left_pose, "Y-clearance pose", "left"
+        )
+        right_command_id = self._move_pose_movj(
+            self._right_robot, right_pose, "Y-clearance pose", "right"
+        )
+
+        if left_command_id is not None:
+            self._wait_for_command_id(
+                self._left_feed_data,
+                self._left_robot,
+                left_command_id,
+                "Y-clearance pose",
+                "left",
+            )
+        else:
+            time.sleep(1.0)
+
+        if right_command_id is not None:
+            self._wait_for_command_id(
+                self._right_feed_data,
+                self._right_robot,
+                right_command_id,
+                "Y-clearance pose",
+                "right",
+            )
+        else:
+            time.sleep(1.0)
+
     def _wait_for_command_id(
         self,
         feed: _FeedState,
@@ -787,20 +993,21 @@ class BiDobotNova5DH(Robot):
         ):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         self.logger.info("Moving both arms to start position...")
-        self._move_joint_movj(
-            self._left_robot,
-            self._left_feed_data,
-            self.config.left_start_position_degree,
-            "start position",
-            "left",
-        )
-        self._move_joint_movj(
-            self._right_robot,
-            self._right_feed_data,
-            self.config.right_start_position_degree,
-            "start position",
-            "right",
-        )
+        if self.config.reset_strategy == ResetStrategy.SYNC_Y_CLEARANCE_THEN_JOINT:
+            self._move_both_arms_y_clearance_sync()
+            self._move_both_arms_joint_movj_sync(
+                self.config.left_start_position_degree,
+                self.config.right_start_position_degree,
+                "start position",
+            )
+        elif self.config.reset_strategy == ResetStrategy.SEQUENTIAL_JOINT:
+            self._move_both_arms_joint_movj(
+                self.config.left_start_position_degree,
+                self.config.right_start_position_degree,
+                "start position",
+            )
+        else:
+            raise ValueError(f"Unsupported reset_strategy: {self.config.reset_strategy}")
         self._initialize_gripper_position()
         self.logger.info("✅ Both arms at start position.")
 
@@ -812,30 +1019,33 @@ class BiDobotNova5DH(Robot):
         ):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         self.logger.info("Moving both arms to home position...")
-        self._move_joint_movj(
-            self._left_robot,
-            self._left_feed_data,
-            self.config.left_home_point_list,
-            "home position",
-            "left",
-        )
-        self._move_joint_movj(
-            self._right_robot,
-            self._right_feed_data,
-            self.config.right_home_point_list,
-            "home position",
-            "right",
-        )
+        if self.config.reset_strategy == ResetStrategy.SYNC_Y_CLEARANCE_THEN_JOINT:
+            self._move_both_arms_y_clearance_sync()
+            self._move_both_arms_joint_movj_sync(
+                self.config.left_home_point_list,
+                self.config.right_home_point_list,
+                "home position",
+            )
+        elif self.config.reset_strategy == ResetStrategy.SEQUENTIAL_JOINT:
+            self._move_both_arms_joint_movj(
+                self.config.left_home_point_list,
+                self.config.right_home_point_list,
+                "home position",
+            )
+        else:
+            raise ValueError(f"Unsupported reset_strategy: {self.config.reset_strategy}")
         self._initialize_gripper_position()
         self.logger.info("✅ Both arms at home position.")
 
     def reset_to_initial_position(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        if self.config.go_to_start:
+        if self.config.reset_target == ResetTarget.START:
             self._go_to_start()
-        else:
+        elif self.config.reset_target == ResetTarget.HOME:
             self._go_to_home()
+        else:
+            raise ValueError(f"Unsupported reset_target: {self.config.reset_target}")
 
     def _read_tcp_pose_quat(self, feed: _FeedState) -> np.ndarray:
         tcp_pose = np.asarray(feed.tcpPose, dtype=np.float64)

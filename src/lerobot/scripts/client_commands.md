@@ -13,6 +13,38 @@ huggingface-cli login
 Paste your HuggingFace access token (with write permission) when prompted.
 The token is stored at `~/.cache/huggingface/token` and persists across sessions.
 
+## BiDobot Nova5 DH + Bi-Pico4 lerobot-teleoperate command
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --fps=30 \
+    --display_data=false \
+    --debug_timing=false \
+    --dryrun=false
+```
+
+## BiDobot Nova5 DH + Bi-Pico4 lerobot-record command
+
+```bash
+lerobot-record \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --dataset.repo_id=Xense/bi_dobot_nova5_dh_pico4_test_0706 \
+    --dataset.num_episodes=10 \
+    --dataset.single_task="teleoperate the bi-dobot nova5 dh grippers with pico4" \
+    --dataset.fps=30 \
+    --dataset.episode_time_s=60 \
+    --dataset.reset_time_s=20 \
+    --dataset.streaming_encoding=true \
+    --dataset.vcodec=auto \
+    --resume=false \
+    --dataset.push_to_hub=false \
+    --display_data=false
+```
+
+
 ## BiARX5 Robot lerobot-teleoperate command
 
 ```bash

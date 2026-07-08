@@ -79,7 +79,7 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     # Cartesian safety workspace for teleoperation actions, in meters.
     # Format: [x, y, z].
-    enable_clip: bool = True
+    enable_clip: bool = False
     left_workspace_min_xyz_m: list[float] = field(
         default_factory=lambda: [-0.30, -0.46, -0.175]
     )
@@ -126,7 +126,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
     left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    left_dh_gripper_position_poll_frequency: float = 2.0  # Hz
+    left_dh_gripper_position_poll_frequency: float = 30.0  # Hz
     left_dh_gripper_command_epsilon: float = 0.0
 
     # Right gripper Modbus RTU configuration
@@ -138,7 +138,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
     right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    right_dh_gripper_position_poll_frequency: float = 2.0  # Hz
+    right_dh_gripper_position_poll_frequency: float = 30.0  # Hz
     right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
@@ -168,19 +168,19 @@ class BiDobotNova5DHConfig(RobotConfig):
                 warmup_s=1.0,
             ),
             "left_wrist": RealSenseCameraConfig(
+                serial_number_or_name="409122274792",
+                fps=30,
+                width=640,
+                height=480,
+                warmup_s=1.0,
+            ),
+            "right_wrist": RealSenseCameraConfig(
                 serial_number_or_name="352122272611",
                 fps=30,
                 width=640,
                 height=480,
                 warmup_s=1.0,
             ),
-            #         "right_wrist": RealSenseCameraConfig(
-            #             serial_number_or_name="230322274234",
-            #             fps=30,
-            #             width=640,
-            #             height=480,
-            #             warmup_s=1.0,
-            #         ),
         }
 
         # Validate control frequency (NRT mode: 1-100 Hz)

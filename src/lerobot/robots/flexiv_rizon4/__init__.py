@@ -18,8 +18,16 @@ import flexivrdk
 
 from .config_flexiv_rizon4 import ControlMode  # noqa: F401
 from .config_flexiv_rizon4 import FlexivRizon4Config  # noqa: F401
-from .flexiv_rizon4 import FlexivRizon4  # noqa: F401
 
 # Export flexivrdk types for direct access
 Mode = flexivrdk.Mode  # noqa: F401
 CoordType = flexivrdk.CoordType  # noqa: F401
+
+
+def __getattr__(name: str):
+    """Load the hardware implementation only when it is requested."""
+    if name == "FlexivRizon4":
+        from .flexiv_rizon4 import FlexivRizon4
+
+        return FlexivRizon4
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

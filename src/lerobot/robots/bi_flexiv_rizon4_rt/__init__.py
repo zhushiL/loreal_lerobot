@@ -18,10 +18,19 @@ try:
     import flexiv_rt
 
     from .config_bi_flexiv_rizon4_rt import BiFlexivRizon4RTConfig  # noqa: F401
-    from .bi_flexiv_rizon4_rt import BiFlexivRizon4RT  # noqa: F401
 
     # Export flexiv_rt types for direct access
     Mode = flexiv_rt.Mode  # noqa: F401
     CoordType = flexiv_rt.CoordType  # noqa: F401
 except ImportError:
+    # Keep unrelated robot types usable when the optional Flexiv SDK is absent.
     pass
+
+
+def __getattr__(name: str):
+    """Load the hardware implementation only when it is requested."""
+    if name == "BiFlexivRizon4RT":
+        from .bi_flexiv_rizon4_rt import BiFlexivRizon4RT
+
+        return BiFlexivRizon4RT
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

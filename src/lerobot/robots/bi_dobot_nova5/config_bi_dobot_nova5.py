@@ -52,10 +52,10 @@ class BiDobotNova5Config(RobotConfig):
     """
 
     # Robot identification
-    left_robot_ip: str = "192.168.5.101"
+    left_robot_ip: str = "192.168.111.101"
     left_dashboardPort: int = 29999
     left_feedPortFour: int = 30004
-    right_robot_ip: str = "192.168.5.102"
+    right_robot_ip: str = "192.168.111.102"
     right_dashboardPort: int = 29999
     right_feedPortFour: int = 30004
 

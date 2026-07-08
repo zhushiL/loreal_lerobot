@@ -14,11 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import flexiv_rt
+try:
+    import flexiv_rt
 
-from .config_flexiv_rizon4_rt import FlexivRizon4RTConfig  # noqa: F401
-from .flexiv_rizon4_rt import FlexivRizon4RT  # noqa: F401
+    from .config_flexiv_rizon4_rt import FlexivRizon4RTConfig  # noqa: F401
 
-# Export flexiv_rt types for direct access
-Mode = flexiv_rt.Mode  # noqa: F401
-CoordType = flexiv_rt.CoordType  # noqa: F401
+    # Export flexiv_rt types for direct access
+    Mode = flexiv_rt.Mode  # noqa: F401
+    CoordType = flexiv_rt.CoordType  # noqa: F401
+except ImportError:
+    # Keep unrelated robot types usable when the optional Flexiv SDK is absent.
+    pass
+
+
+def __getattr__(name: str):
+    """Load the hardware implementation only when it is requested."""
+    if name == "FlexivRizon4RT":
+        from .flexiv_rizon4_rt import FlexivRizon4RT
+
+        return FlexivRizon4RT
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

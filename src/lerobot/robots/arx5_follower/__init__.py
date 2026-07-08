@@ -14,5 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .arx5_follower import ARX5Follower  # noqa: F401
 from .config_arx5_follower import ARX5FollowerConfig  # noqa: F401
+
+
+def __getattr__(name: str):
+    """Load the ARX5 SDK-dependent implementation only when it is requested."""
+    if name == "ARX5Follower":
+        from .arx5_follower import ARX5Follower
+
+        return ARX5Follower
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

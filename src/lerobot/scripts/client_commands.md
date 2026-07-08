@@ -479,12 +479,41 @@ lerobot-teleoperate \
     --robot.type=bi_dobot_nova5_dh \
     --teleop.type=bi_pico4 \
     --fps=30 \
-    --display_data=false \
+    --display_data=true \
     --debug_timing=false \
     --dryrun=false
 ```
 
+看一下如果不带夹爪速度会不会上去
+lerobot-teleoperate \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --fps=30 \
+    --display_data=true \
+    --debug_timing=true \
+    --dryrun=false \
+    --robot.use_left_gripper=false \
+    --robot.use_right_gripper=false
+```
+
 ## BiDobot Nova5 DH + Bi-Pico4 lerobot-record command
+
+```bash
+lerobot-record \
+    --robot.type=bi_dobot_nova5_dh \
+    --teleop.type=bi_pico4 \
+    --dataset.repo_id=shilin5499/lerobot_start \
+    --dataset.num_episodes=2 \
+    --dataset.single_task="teleoperate the bi-dobot nova5 dh grippers with pico4" \
+    --dataset.fps=30 \
+    --dataset.episode_time_s=60 \
+    --dataset.reset_time_s=20 \
+    --dataset.streaming_encoding=true \
+    --dataset.vcodec=auto \
+    --resume=false \
+    --dataset.push_to_hub=false \
+    --display_data=false
+```
 
 ```bash
 lerobot-record \

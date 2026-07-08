@@ -15,4 +15,12 @@
 # limitations under the License.
 
 from .config_bi_xense_flare_grippers import BiXenseFlareGrippersConfig
-from .bi_xense_flare_grippers import BiXenseFlareGrippers
+
+
+def __getattr__(name: str):
+    """Load the hardware implementation only when it is requested."""
+    if name == "BiXenseFlareGrippers":
+        from .bi_xense_flare_grippers import BiXenseFlareGrippers
+
+        return BiXenseFlareGrippers
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -43,6 +43,21 @@ class ControlMode(str, Enum):
     CARTESIAN_MOTION = "cartesian_motion_control"
 
 
+class ResetMoveOrder(str, Enum):
+    LEFT_THEN_RIGHT = "left_then_right"
+    RIGHT_THEN_LEFT = "right_then_left"
+
+
+class ResetStrategy(str, Enum):
+    SEQUENTIAL_JOINT = "sequential_joint"
+    SYNC_Y_CLEARANCE_THEN_JOINT = "sync_y_clearance_then_joint"
+
+
+class ResetTarget(str, Enum):
+    HOME = "home"
+    START = "start"
+
+
 @RobotConfig.register_subclass("bi_dobot_nova5_dh")
 @dataclass
 class BiDobotNova5DHConfig(RobotConfig):
@@ -67,6 +82,12 @@ class BiDobotNova5DHConfig(RobotConfig):
 
     # Connection behavior: if True, move to start positions after connect
     go_to_start: bool = True
+    reset_move_order: ResetMoveOrder = ResetMoveOrder.RIGHT_THEN_LEFT
+    reset_strategy: ResetStrategy = ResetStrategy.SYNC_Y_CLEARANCE_THEN_JOINT
+    reset_target: ResetTarget = ResetTarget.HOME
+    reset_y_clearance_m: float = 0.035
+    left_reset_y_clearance_sign: float = 1.0
+    right_reset_y_clearance_sign: float = -1.0
 
     aheadtime: float = 50.0  # PID controller D (20.0-100.0, default 50.0)
     gain: float = 500.0  # PID controller P (200.0-1000.0, default 500.0)
@@ -80,31 +101,31 @@ class BiDobotNova5DHConfig(RobotConfig):
     # Format: [x, y, z].
     enable_clip: bool = True
     left_workspace_min_xyz_m: list[float] = field(
-        default_factory=lambda: [-0.30, -0.46, -0.175]
+        default_factory=lambda: [-0.60, -0.49, -0.175]
     )
     left_workspace_max_xyz_m: list[float] = field(
-        default_factory=lambda: [0.70, 0.15, 0.50]
+        default_factory=lambda: [0.70, 0.15, 0.60]
     )
     right_workspace_min_xyz_m: list[float] = field(
-        default_factory=lambda: [-0.30, -0.15, -0.167]
+        default_factory=lambda: [-0.60, -0.15, -0.167]
     )
     right_workspace_max_xyz_m: list[float] = field(
-        default_factory=lambda: [0.70, 0.46, 0.50]
+        default_factory=lambda: [0.70, 0.49, 0.60]
     )
 
     left_home_point_list: list[float] = field(
-        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+        default_factory=lambda: [-45, 0, -90, 0, 90, 0]
     )
     right_home_point_list: list[float] = field(
-        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+        default_factory=lambda: [225, 0, 90, 0, -90, 0]
     )
 
     # Start position parameters (for MoveJ primitive)
     left_start_position_degree: list[float] = field(
-        default_factory=lambda: [-90, 0, -90, 0, 90, 0]
+        default_factory=lambda: [-45, 0, -90, 0, 90, 0]
     )
     right_start_position_degree: list[float] = field(
-        default_factory=lambda: [270, 0, 90, 0, -90, 0]
+        default_factory=lambda: [225, 0, 90, 0, -90, 0]
     )
     # Joint velocity scale for moving to start position (1-100, default 30)
     start_vel_scale: int = 30
@@ -125,7 +146,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     left_dh_gripper_force: int = 100  # 20-100 %
     left_dh_gripper_init_open: bool = True
     left_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    left_dh_gripper_position_poll_frequency: float = 3.0  # Hz
+    left_dh_gripper_position_poll_frequency: float = 20.0  # Hz
     left_dh_gripper_command_epsilon: float = 0.0
 
     # Right gripper Modbus RTU configuration
@@ -137,7 +158,7 @@ class BiDobotNova5DHConfig(RobotConfig):
     right_dh_gripper_force: int = 100  # 20-100 %
     right_dh_gripper_init_open: bool = True
     right_dh_gripper_worker_frequency: float = 100.0  # Hz, best effort
-    right_dh_gripper_position_poll_frequency: float = 3.0  # Hz
+    right_dh_gripper_position_poll_frequency: float = 20.0  # Hz
     right_dh_gripper_command_epsilon: float = 0.0
 
     # Auto-created in __post_init__ from dh_gripper_* parameters (do not set directly)
@@ -167,19 +188,19 @@ class BiDobotNova5DHConfig(RobotConfig):
                 warmup_s=1.0,
             ),
             "left_wrist": RealSenseCameraConfig(
+                serial_number_or_name="409122274792",
+                fps=30,
+                width=640,
+                height=480,
+                warmup_s=1.0,
+            ),
+            "right_wrist": RealSenseCameraConfig(
                 serial_number_or_name="352122272611",
                 fps=30,
                 width=640,
                 height=480,
                 warmup_s=1.0,
             ),
-            #         "right_wrist": RealSenseCameraConfig(
-            #             serial_number_or_name="230322274234",
-            #             fps=30,
-            #             width=640,
-            #             height=480,
-            #             warmup_s=1.0,
-            #         ),
         }
 
         # Validate control frequency (NRT mode: 1-100 Hz)

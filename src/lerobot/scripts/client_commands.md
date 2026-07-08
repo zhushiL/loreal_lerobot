@@ -31,7 +31,7 @@ lerobot-teleoperate \
 lerobot-record \
     --robot.type=bi_dobot_nova5_dh \
     --teleop.type=bi_pico4 \
-    --dataset.repo_id=Xense/bi_dobot_nova5_dh_pico4_test \
+    --dataset.repo_id=Xense/bi_dobot_nova5_dh_pico4_test_0706 \
     --dataset.num_episodes=10 \
     --dataset.single_task="teleoperate the bi-dobot nova5 dh grippers with pico4" \
     --dataset.fps=30 \
